@@ -12,6 +12,7 @@ A phone-first app for golf money games, starting with the Nassau.
 - `nassau.js` — the betting engine. Pure functions, no DOM or storage, so it can move into a native app unchanged.
 - `app.js` — the UI (Preact + htm, loaded from a CDN; no build step).
 - `index.html` — page shell and styles.
+- `auth.js` — sign-in and authenticated API calls from the browser.
 - `api/` — serverless API (Vercel functions, Web-standard `GET`/`POST` handlers). Files under `api/_lib/` are shared helpers, not endpoints.
 - `db/migrations/` — Postgres schema (Neon), applied in order by `npm run migrate`.
 - `scripts/dev.js` — local server for the app and the API.
@@ -25,4 +26,6 @@ npm run migrate
 npm run dev
 ```
 
-Then open http://localhost:8017. `/api/health` reports whether the database is reachable. The app still saves to the browser's localStorage until it's switched over to the API.
+Then open http://localhost:8017. `/api/health` reports whether the database is reachable.
+
+Sign-in is Neon Auth (managed Better Auth). The browser talks to it through `/api/auth/*`, which `api/auth-proxy.js` forwards to `NEON_AUTH_URL` so the session cookie stays first-party (Safari drops third-party cookies). API endpoints check a short-lived JWT from that session; wrap a handler in `authed()` from `api/_lib/auth.js` to require a signed-in user. The app still saves to the browser's localStorage until it's switched over to the API.

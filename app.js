@@ -1,5 +1,6 @@
 import { html, render, useState, useReducer, useEffect, useMemo, useRef } from 'https://cdn.jsdelivr.net/npm/htm@3.1.1/preact/standalone.module.js';
 import * as N from './nassau.js';
+import * as A from './auth.js';
 
 // ---------- Icons ----------
 const I = {
@@ -192,6 +193,22 @@ function useToast() {
 
 // ---------- App ----------
 function App() {
+  // undefined = still checking, null = signed out
+  const [user, setUser] = useState(undefined);
+  const [offline, setOffline] = useState(false);
+  useEffect(() => {
+    A.session().then(setUser).catch(() => {
+      // No signal: trust the last signed-in user so scoring still works on the course.
+      setOffline(true);
+      setUser(A.cachedUser());
+    });
+  }, []);
+  if (user === undefined) return html`<div class="app"></div>`;
+  if (!user) return html`<${SignIn} offline=${offline} onDone=${(u) => { setOffline(false); setUser(u); }} />`;
+  return html`<${Main} user=${user} onSignOut=${async () => { await A.signOut(); setUser(null); }} />`;
+}
+
+function Main({ user, onSignOut }) {
   const [state, dispatch] = useReducer(reducer, null, load);
   useEffect(() => save(state), [state]);
   const [route, setRoute] = useState({ view: 'home' });
@@ -203,14 +220,71 @@ function App() {
     if (round) return html`<${Round} round=${round} dispatch=${dispatch} go=${go} />`;
   }
   return html`<div class="app">
-    ${route.view === 'players' ? html`<${Players} state=${state} dispatch=${dispatch} />`
+    ${route.view === 'account' ? html`<${Account} user=${user} onSignOut=${onSignOut} go=${go} />`
+      : route.view === 'players' ? html`<${Players} state=${state} dispatch=${dispatch} />`
       : route.view === 'courses' ? html`<${Courses} state=${state} dispatch=${dispatch} />`
-      : html`<${Home} state=${state} dispatch=${dispatch} go=${go} />`}
+      : html`<${Home} state=${state} dispatch=${dispatch} go=${go} user=${user} />`}
     <nav class="tabbar" aria-label="Main"><div class="tabbar-inner">
       ${[['home', 'Rounds', I.home], ['players', 'Players', I.users], ['courses', 'Courses', I.pin]].map(([v, l, ic]) => html`
-        <button type="button" aria-current=${route.view === v || (v === 'home' && !['players', 'courses'].includes(route.view)) ? 'page' : null} onClick=${() => go({ view: v })}>${ic}${l}</button>`)}
+        <button type="button" aria-current=${route.view === v || (v === 'home' && !['players', 'courses', 'account'].includes(route.view)) ? 'page' : null} onClick=${() => go({ view: v })}>${ic}${l}</button>`)}
     </div></nav>
   </div>`;
+}
+
+// ---------- Sign in ----------
+function SignIn({ offline, onDone }) {
+  const [mode, setMode] = useState('in'); // 'in' | 'up'
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const up = mode === 'up';
+  const valid = email.includes('@') && password.length >= 8 && (!up || name.trim());
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!valid || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const user = up ? await A.signUp(name.trim(), email.trim(), password) : await A.signIn(email.trim(), password);
+      if (user) onDone(user);
+      else setError('Signed in, but the session didn\u2019t stick. Check that cookies are allowed.');
+    } catch (err) {
+      setError(err instanceof TypeError ? 'No connection. Try again when you have signal.' : err.message);
+    }
+    setBusy(false);
+  };
+  return html`<div class="app"><main class="page fade-in signin">
+    <div class="wordmark">Dorm<i>ie</i></div>
+    <p class="sub">${up ? 'Create an account to save your rounds and keep the running tab with everyone you play.' : 'Sign in to your rounds, players and running tab.'}</p>
+    ${offline && html`<div class="banner">${I.info}<span>You're offline. Sign in once you have signal.</span></div>`}
+    <form class="card pad" style="display:flex;flex-direction:column;gap:12px" onSubmit=${submit}>
+      ${up && html`<div class="field"><label for="si-name">Name</label><input id="si-name" class="input" value=${name} onInput=${(e) => setName(e.target.value)} autocomplete="name" placeholder="Your name" /></div>`}
+      <div class="field"><label for="si-email">Email</label><input id="si-email" class="input" type="email" value=${email} onInput=${(e) => setEmail(e.target.value)} autocomplete="email" autocapitalize="off" /></div>
+      <div class="field"><label for="si-pw">Password</label><input id="si-pw" class="input" type="password" value=${password} onInput=${(e) => setPassword(e.target.value)} autocomplete=${up ? 'new-password' : 'current-password'} />
+        ${up && html`<span class="note">At least 8 characters.</span>`}</div>
+      ${error && html`<div class="form-error" role="alert">${error}</div>`}
+      <button class="btn primary lg block" disabled=${!valid || busy}>${busy ? 'One sec\u2026' : up ? 'Create account' : 'Sign in'}</button>
+    </form>
+    <p class="sub" style="text-align:center">${up ? 'Already have an account?' : 'New here?'} <button type="button" class="link" onClick=${() => { setMode(up ? 'in' : 'up'); setError(null); }}>${up ? 'Sign in' : 'Create an account'}</button></p>
+  </main></div>`;
+}
+
+function Account({ user, onSignOut, go }) {
+  const [busy, setBusy] = useState(false);
+  return html`<main class="page fade-in">
+    <header class="topbar">
+      <button type="button" class="icon-btn" aria-label="Back" onClick=${() => go({ view: 'home' })}>${I.back}</button>
+      <div class="title"><b>Account</b></div>
+      <span class="icon-btn"></span>
+    </header>
+    <div class="card rows">
+      <div class="row"><${Avatar} p=${{ name: user.name || user.email, color: 'var(--accent)' }} />
+        <div class="grow"><div class="name">${user.name || 'No name'}</div><div class="meta">${user.email}</div></div></div>
+    </div>
+    <button type="button" class="btn danger block" disabled=${busy} onClick=${async () => { setBusy(true); await onSignOut(); }}>Sign out</button>
+  </main>`;
 }
 
 // ---------- Home ----------
@@ -237,14 +311,17 @@ function Scoreboard({ round, onOpen }) {
   </button>`;
 }
 
-function Home({ state, dispatch, go }) {
+function Home({ state, dispatch, go, user }) {
   const live = state.rounds.filter((r) => r.status === 'live');
   const past = state.rounds.filter((r) => r.status !== 'live');
   const hasSample = state.rounds.some((r) => r.sample) || state.players.some((p) => p.sample);
   return html`<main class="page fade-in">
     <div class="home-head">
       <div class="wordmark">Dorm<i>ie</i></div>
-      <small>${new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}</small>
+      <div class="home-head-right">
+        <small>${new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}</small>
+        <button type="button" class="me-btn" aria-label="Account" onClick=${() => go({ view: 'account' })}><${Avatar} p=${{ name: user.name || user.email, color: 'var(--accent)' }} size="sm" /></button>
+      </div>
     </div>
 
     ${live.map((r) => html`<div class="section">

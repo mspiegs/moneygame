@@ -8,6 +8,7 @@ import { Readable } from 'node:stream';
 
 const root = new URL('..', import.meta.url).pathname;
 const port = Number(process.env.PORT) || 8017;
+const { rewrites = [] } = JSON.parse(await readFile(join(root, 'vercel.json'), 'utf8').catch(() => '{}'));
 const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon' };
 
 async function api(req, res, path) {
@@ -40,12 +41,26 @@ async function file(res, path) {
   res.end(data);
 }
 
+/** Applies vercel.json rewrites (only the `/prefix/:name*` form is supported). */
+function rewrite(url) {
+  const u = new URL(url, 'http://x');
+  for (const { source, destination } of rewrites) {
+    const m = source.match(/^(.*?):(\w+)\*$/);
+    if (!m || !u.pathname.startsWith(m[1])) continue;
+    const dest = new URL(destination.replace(`:${m[2]}*`, encodeURIComponent(u.pathname.slice(m[1].length))), 'http://x');
+    for (const [k, v] of u.searchParams) dest.searchParams.append(k, v);
+    return dest.pathname + dest.search;
+  }
+  return url;
+}
+
 function send(res, status, text) {
   res.writeHead(status, { 'content-type': 'text/plain' });
   res.end(text);
 }
 
 createServer(async (req, res) => {
+  req.url = rewrite(req.url);
   const { pathname } = new URL(req.url, 'http://x');
   try {
     if (pathname.startsWith('/api/')) await api(req, res, pathname);
