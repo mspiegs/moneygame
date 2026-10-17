@@ -1,6 +1,7 @@
-import { html, render, useState, useReducer, useEffect, useMemo, useRef } from 'https://cdn.jsdelivr.net/npm/htm@3.1.1/preact/standalone.module.js';
+import { html, render, useState, useReducer, useEffect, useMemo, useRef } from './vendor/htm-preact-3.1.1.module.js';
 import * as N from './nassau.js';
 import * as A from './auth.js';
+import { API_BASE } from './config.js';
 import { Sync, opsFor } from './store.js';
 
 // ---------- Icons ----------
@@ -204,6 +205,11 @@ function App() {
   const [user, setUser] = useState(undefined);
   const [offline, setOffline] = useState(false);
   useEffect(() => {
+    const out = () => setUser(null);
+    window.addEventListener('dormie:signed-out', out);
+    return () => window.removeEventListener('dormie:signed-out', out);
+  }, []);
+  useEffect(() => {
     A.session().then(setUser).catch(() => {
       // No signal: trust the last signed-in user so scoring still works on the course.
       setOffline(true);
@@ -230,7 +236,7 @@ function useInvitePreview(code) {
   const [preview, setPreview] = useState(null);
   useEffect(() => {
     if (!code) return;
-    fetch(`/api/invite?code=${encodeURIComponent(code)}`)
+    fetch(`${API_BASE}/api/invite?code=${encodeURIComponent(code)}`)
       .then((r) => r.json().then((d) => (r.ok ? d : { error: d.error })))
       .then(setPreview, () => {});
   }, [code]);

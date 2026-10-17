@@ -10,7 +10,8 @@ A phone-first app for golf money games, starting with the Nassau.
 ## Files
 
 - `nassau.js` — the betting engine. Pure functions, no DOM or storage, so it can move into a native app unchanged.
-- `app.js` — the UI (Preact + htm, loaded from a CDN; no build step).
+- `app.js` — the UI (Preact + htm, vendored in `vendor/`; no build step).
+- `config.js` — where the API lives (`''` = same origin). The iPhone build swaps in the server's URL.
 - `index.html` — page shell and styles.
 - `store.js` — keeps local state in sync with the server: changes queue in an offline outbox and go to `/api/sync`; fresh state comes from `/api/state`.
 - `auth.js` — sign-in and authenticated API calls from the browser.
@@ -40,4 +41,22 @@ vercel --prod
 ```
 
 Production needs `DATABASE_URL` and `NEON_AUTH_URL` set in Vercel. Any new domain the app is served from must be added to Neon Auth's trusted domains, or sign-in fails.
+
+## Databases
+
+Neon project `dormie`. Production (Vercel) uses the `main` branch; local development uses the `dev` branch, so testing never touches real data. Each branch has its own Neon Auth, so accounts are separate too. `.env` holds the dev branch's `DATABASE_URL` and `NEON_AUTH_URL`; production's live in Vercel. To start dev over from a copy of production, reset the `dev` branch from its parent in the Neon console, then run `npm run migrate`.
+
+## iPhone app
+
+The iPhone app is the same web app wrapped with [Capacitor](https://capacitorjs.com) (project in `ios/`, config in `capacitor.config.json`). `npm run app:build` copies the web files into `www/` and points `config.js` at the API server; Capacitor bundles `www/` into the app.
+
+```bash
+npm run ios
+```
+
+That builds `www/` for production, syncs it into the Xcode project, and opens Xcode. For the simulator against your local server instead: `DORMIE_API=http://localhost:8017 npm run app:build && npx cap sync ios`, with `npm run dev` running.
+
+Sign-in in the app doesn't use cookies: it sends `x-dormie-client: native`, keeps the Neon Auth session itself (in Capacitor Preferences), and `api/auth-proxy.js` turns that into the cookie Neon Auth expects. API calls use the same short-lived JWT as the website. `CapacitorHttp` sends requests natively, so the API needs no CORS setup.
+
+To ship a build: in Xcode, select the `App` target, set your team under Signing & Capabilities, then Product → Archive → Distribute App → TestFlight & App Store. The bundle ID is `com.mattspiegel.dormie`.
 

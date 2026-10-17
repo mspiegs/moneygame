@@ -1,0 +1,12 @@
+{
+  "appId": "com.mattspiegel.dormie",
+  "appName": "Dormie",
+  "webDir": "www",
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#ECEFEB"
+  },
+  "plugins": {
+    "CapacitorHttp": { "enabled": true }
+  }
+}

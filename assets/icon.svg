@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Dormie app icon: a flag on the green, in the scoreboard colors. Full-bleed, no transparency (App Store rule). -->
+  <rect width="1024" height="1024" fill="#0E4A30"/>
+  <g transform="translate(-70 0)">
+  <ellipse cx="512" cy="812" rx="300" ry="58" fill="#0B3D27"/>
+  <ellipse cx="512" cy="806" rx="54" ry="16" fill="#06261A"/>
+  <rect x="490" y="196" width="28" height="612" rx="14" fill="#F3F0E4"/>
+  <path d="M518 206 L812 318 Q826 324 812 330 L518 446 Z" fill="#E2A916"/>
+  </g>
+</svg>

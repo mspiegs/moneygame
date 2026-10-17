@@ -7,10 +7,18 @@
   },
   "scripts": {
     "dev": "node --watch --env-file-if-exists=.env scripts/dev.js",
-    "migrate": "node --env-file-if-exists=.env scripts/migrate.js"
+    "migrate": "node --env-file-if-exists=.env scripts/migrate.js",
+    "app:build": "node scripts/build-app.js",
+    "ios": "node scripts/build-app.js && cap sync ios && cap open ios"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.2.0",
     "jose": "^6.2.12"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.5.3",
+    "@capacitor/core": "^8.5.3",
+    "@capacitor/ios": "^8.5.3",
+    "@capacitor/preferences": "^8.0.1"
   }
 }

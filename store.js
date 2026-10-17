@@ -163,8 +163,9 @@ export class Sync {
         res = await api('sync', { method: 'POST', body: { group, ops: batch } });
       } catch (e) {
         // Offline, or the server stopped partway: keep everything and try again later.
+        // Signed out: keep the queue for when this user signs back in, but stop retrying.
         this.offline = e instanceof TypeError;
-        this.retry = setTimeout(() => this.flush(), RETRY_MS);
+        if (e.code !== 'SIGNED_OUT') this.retry = setTimeout(() => this.flush(), RETRY_MS);
         this.emit();
         return false;
       }
