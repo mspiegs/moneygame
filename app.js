@@ -210,9 +210,49 @@ function App() {
       setUser(A.cachedUser());
     });
   }, []);
+  // An invite link (/?invite=code) is accepted once the visitor is signed in.
+  const [invite, setInvite] = useState(() => new URLSearchParams(location.search).get('invite'));
+  const [joined, setJoined] = useState(null);
+  // Bumped to rebuild Main (and its sync) after switching groups.
+  const [groupKey, setGroupKey] = useState(0);
+  const useGroup = (group) => { Sync.useGroup(user.id, group); setGroupKey((k) => k + 1); };
+  const doneInvite = () => { history.replaceState(null, '', location.pathname); setInvite(null); };
+
   if (user === undefined) return html`<div class="app"></div>`;
-  if (!user) return html`<${SignIn} offline=${offline} onDone=${(u) => { setOffline(false); setUser(u); }} />`;
-  return html`<${Main} user=${user} onSignOut=${async () => { await A.signOut(); setUser(null); }} />`;
+  if (!user) return html`<${SignIn} offline=${offline} invite=${invite} onDone=${(u) => { setOffline(false); setUser(u); }} />`;
+  if (invite) return html`<${Joining} code=${invite} onJoined=${(res) => { useGroup(res.group); setJoined(res.group.name); doneInvite(); }} onSkip=${doneInvite} />`;
+  return html`<${Main} key=${`${user.id}:${groupKey}`} user=${user} joined=${joined} onGroup=${useGroup}
+    onSignOut=${async () => { await A.signOut(); setUser(null); }} />`;
+}
+
+/** Preview of an invite link, for the sign-in screen. */
+function useInvitePreview(code) {
+  const [preview, setPreview] = useState(null);
+  useEffect(() => {
+    if (!code) return;
+    fetch(`/api/invite?code=${encodeURIComponent(code)}`)
+      .then((r) => r.json().then((d) => (r.ok ? d : { error: d.error })))
+      .then(setPreview, () => {});
+  }, [code]);
+  return preview;
+}
+
+function Joining({ code, onJoined, onSkip }) {
+  const [error, setError] = useState(null);
+  const run = () => {
+    setError(null);
+    A.api('invite', { method: 'POST', body: { action: 'accept', code } }).then(onJoined, (e) => setError(e instanceof TypeError ? 'No connection. Try again when you have signal.' : e.message));
+  };
+  useEffect(run, [code]);
+  return html`<div class="app"><main class="page signin">
+    <div class="wordmark">Dorm<i>ie</i></div>
+    ${error
+      ? html`<div class="card pad" style="display:flex;flex-direction:column;gap:12px">
+          <div class="form-error" role="alert">${error}</div>
+          <div style="display:flex;gap:10px"><button type="button" class="btn ghost" onClick=${onSkip}>Skip</button><button type="button" class="btn primary" style="flex:1" onClick=${run}>Try again</button></div>
+        </div>`
+      : html`<p class="sub">Joining the group\u2026</p>`}
+  </main></div>`;
 }
 
 const tabFor = (view) => (view === 'opponent' ? 'money' : ['money', 'players', 'courses'].includes(view) ? view : 'home');
@@ -220,7 +260,7 @@ const tabFor = (view) => (view === 'opponent' ? 'money' : ['money', 'players', '
 // While a round is live, check for scores entered on other phones this often.
 const LIVE_PULL_MS = 20_000;
 
-function Main({ user, onSignOut }) {
+function Main({ user, onSignOut, onGroup, joined }) {
   const sync = useMemo(() => new Sync(user.id, { seed, loadV1 }), [user.id]);
   const [state, apply] = useReducer(reducer, null, () => sync.state);
   const latest = useRef(state);
@@ -262,12 +302,13 @@ function Main({ user, onSignOut }) {
     if (round) return html`<${Round} round=${round} dispatch=${dispatch} go=${go} />`;
   }
   return html`<div class="app">
-    ${route.view === 'account' ? html`<${Account} user=${user} onSignOut=${onSignOut} go=${go} />`
+    ${route.view === 'account' ? html`<${Account} user=${user} onSignOut=${onSignOut} go=${go} syncStatus=${syncStatus}
+          onGroup=${async (g) => { await sync.flush(); onGroup(g); }} />`
       : route.view === 'money' ? html`<${Money} state=${state} dispatch=${dispatch} user=${user} go=${go} />`
       : route.view === 'opponent' ? html`<${Opponent} state=${state} dispatch=${dispatch} user=${user} go=${go} id=${route.id} />`
-      : route.view === 'players' ? html`<${Players} state=${state} dispatch=${dispatch} user=${user} />`
+      : route.view === 'players' ? html`<${Players} state=${state} dispatch=${dispatch} user=${user} syncStatus=${syncStatus} />`
       : route.view === 'courses' ? html`<${Courses} state=${state} dispatch=${dispatch} />`
-      : html`<${Home} state=${state} dispatch=${dispatch} go=${go} user=${user} syncStatus=${syncStatus} />`}
+      : html`<${Home} state=${state} dispatch=${dispatch} go=${go} user=${user} syncStatus=${syncStatus} joined=${joined} />`}
     <nav class="tabbar" aria-label="Main"><div class="tabbar-inner">
       ${[['home', 'Rounds', I.home], ['money', 'Money', I.cash], ['players', 'Players', I.users], ['courses', 'Courses', I.pin]].map(([v, l, ic]) => html`
         <button type="button" aria-current=${tabFor(route.view) === v ? 'page' : null} onClick=${() => go({ view: v })}>${ic}${l}</button>`)}
@@ -276,14 +317,17 @@ function Main({ user, onSignOut }) {
 }
 
 // ---------- Sign in ----------
-function SignIn({ offline, onDone }) {
-  const [mode, setMode] = useState('in'); // 'in' | 'up'
+function SignIn({ offline, invite, onDone }) {
+  const preview = useInvitePreview(invite);
+  const [mode, setMode] = useState(invite ? 'up' : 'in'); // 'in' | 'up'
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const up = mode === 'up';
+  // Joining as a named player: start with their name.
+  useEffect(() => { if (preview?.player && !preview.player.taken) setName((n) => n || preview.player.name); }, [preview]);
   const valid = email.includes('@') && password.length >= 8 && (!up || name.trim());
   const submit = async (e) => {
     e.preventDefault();
@@ -303,6 +347,12 @@ function SignIn({ offline, onDone }) {
     <div class="wordmark">Dorm<i>ie</i></div>
     <p class="sub">${up ? 'Create an account to save your rounds and keep the running tab with everyone you play.' : 'Sign in to your rounds, players and running tab.'}</p>
     ${offline && html`<div class="banner">${I.info}<span>You're offline. Sign in once you have signal.</span></div>`}
+    ${preview && (preview.error || preview.expired
+      ? html`<div class="banner">${I.info}<span>${preview.error || 'That invite has expired. Ask for a new link.'}</span></div>`
+      : html`<div class="invite-card card pad">
+          <b>${preview.inviter} invited you to ${preview.group.name}</b>
+          <span>${preview.player && !preview.player.taken ? `You'll join as ${preview.player.name}, with your rounds and running tab.` : 'You\u2019ll see the group\u2019s rounds and your running tab.'}${up ? ' Create an account to join.' : ' Sign in to join.'}</span>
+        </div>`)}
     <form class="card pad" style="display:flex;flex-direction:column;gap:12px" onSubmit=${submit}>
       ${up && html`<div class="field"><label for="si-name">Name</label><input id="si-name" class="input" value=${name} onInput=${(e) => setName(e.target.value)} autocomplete="name" placeholder="Your name" /></div>`}
       <div class="field"><label for="si-email">Email</label><input id="si-email" class="input" type="email" value=${email} onInput=${(e) => setEmail(e.target.value)} autocomplete="email" autocapitalize="off" /></div>
@@ -315,8 +365,10 @@ function SignIn({ offline, onDone }) {
   </main></div>`;
 }
 
-function Account({ user, onSignOut, go }) {
+function Account({ user, onSignOut, go, syncStatus, onGroup }) {
   const [busy, setBusy] = useState(false);
+  const [groups, setGroups] = useState(null);
+  useEffect(() => { A.api('me').then((d) => setGroups(d.groups), () => setGroups([])); }, []);
   return html`<main class="page fade-in">
     <header class="topbar">
       <button type="button" class="icon-btn" aria-label="Back" onClick=${() => go({ view: 'home' })}>${I.back}</button>
@@ -327,6 +379,16 @@ function Account({ user, onSignOut, go }) {
       <div class="row"><${Avatar} p=${{ name: user.name || user.email, color: 'var(--accent)' }} />
         <div class="grow"><div class="name">${user.name || 'No name'}</div><div class="meta">${user.email}</div></div></div>
     </div>
+    ${groups?.length > 1 && html`<div class="section">
+      <div class="section-head"><h2>Groups</h2><span class="meta">tap to switch</span></div>
+      <div class="card rows">${groups.map((g) => {
+        const current = g.id === syncStatus.group;
+        return html`<button type="button" class="row" disabled=${current || busy} onClick=${() => { setBusy(true); onGroup(g); }}>
+          <div class="grow"><div class="name">${g.name}</div><div class="meta">${g.role === 'owner' ? 'You started it' : 'Member'}</div></div>
+          ${current && html`<span class="link">Showing</span>`}
+        </button>`;
+      })}</div>
+    </div>`}
     <button type="button" class="btn danger block" disabled=${busy} onClick=${async () => { setBusy(true); await onSignOut(); }}>Sign out</button>
   </main>`;
 }
@@ -355,7 +417,7 @@ function Scoreboard({ round, onOpen }) {
   </button>`;
 }
 
-function Home({ state, dispatch, go, user, syncStatus }) {
+function Home({ state, dispatch, go, user, syncStatus, joined }) {
   const live = state.rounds.filter((r) => r.status === 'live');
   const past = state.rounds.filter((r) => r.status !== 'live');
   const hasSample = state.rounds.some((r) => r.sample) || state.players.some((p) => p.sample);
@@ -390,6 +452,7 @@ function Home({ state, dispatch, go, user, syncStatus }) {
       </div>` : html`<div class="card empty-state">Finished rounds land here with who paid whom.</div>`}
     </div>
 
+    ${joined && html`<div class="banner">${I.check}<span style="flex:1">You joined ${joined}. Its rounds and your tab are here now.</span></div>`}
     ${syncStatus.offline && syncStatus.pending > 0 && html`<div class="banner">${I.info}<span style="flex:1">You're offline. ${syncStatus.pending} ${syncStatus.pending === 1 ? 'change is' : 'changes are'} saved on this phone and will sync when you have signal.</span></div>`}
 
     ${hasSample && html`<div class="banner">${I.info}<span style="flex:1">The group and round here are samples so you can see how it works. Add your own players, then clear them out.</span>
@@ -584,12 +647,36 @@ function PlayerForm({ initial, onSave, onCancel, submitLabel = 'Add player' }) {
   </form>`;
 }
 
-function Players({ state, dispatch, user }) {
+/** Makes an invite link for a player and offers to share or copy it. */
+function InvitePanel({ player, group, user, onClose }) {
+  const [link, setLink] = useState(null);
+  const [error, setError] = useState(null);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    A.api('invite', { method: 'POST', body: { action: 'create', group, playerId: player.id } })
+      .then((d) => setLink(d.url), (e) => setError(e instanceof TypeError ? 'You need signal to make an invite link.' : e.message));
+  }, [player.id]);
+  const text = `${first(user.name || 'I')} added you to our golf group on Dormie. Join to see our rounds and who owes whom:`;
+  return html`<div class="invite-panel">
+    ${error ? html`<div class="form-error" role="alert">${error}</div>`
+      : !link ? html`<span class="note">Making a link\u2026</span>`
+      : html`<span class="note">Send this to ${first(player.name)}. When they sign up with it, they join the group as ${player.name}.</span>
+        <input class="input" readonly value=${link} onFocus=${(e) => e.target.select()} aria-label="Invite link" />
+        <div style="display:flex;gap:10px">
+          ${navigator.share && html`<button type="button" class="btn primary sm" style="flex:1" onClick=${() => navigator.share({ title: 'Join me on Dormie', text, url: link }).catch(() => {})}>Share</button>`}
+          <button type="button" class="btn ghost sm" style="flex:1" onClick=${() => navigator.clipboard?.writeText(`${text} ${link}`).then(() => setCopied(true), () => {})}>${copied ? 'Copied' : 'Copy link'}</button>
+          <button type="button" class="btn ghost sm" onClick=${onClose}>Done</button>
+        </div>`}
+  </div>`;
+}
+
+function Players({ state, dispatch, user, syncStatus }) {
   const [editing, setEditing] = useState(null);
   const [adding, setAdding] = useState(false);
   const [confirm, setConfirm] = useState(null);
+  const [inviting, setInviting] = useState(null);
   return html`<main class="page fade-in">
-    <div><h1 class="h">Players</h1><p class="sub">Your regular group. Handicaps carry into every new round.</p></div>
+    <div><h1 class="h">Players</h1><p class="sub">${syncStatus.groupName ? `${syncStatus.groupName}. ` : 'Your regular group. '}Handicaps carry into every new round. Invite players so they can follow along.</p></div>
     ${adding ? html`<${PlayerForm} onCancel=${() => setAdding(false)} onSave=${(v) => { dispatch({ type: 'addPlayer', player: { id: uid('p-'), color: COLORS[state.players.length % COLORS.length], ...v } }); setAdding(false); }} />`
       : html`<button type="button" class="btn soft block" onClick=${() => setAdding(true)}>${I.plus} Add player</button>`}
     <div class="card rows">
@@ -597,13 +684,14 @@ function Players({ state, dispatch, user }) {
         ? html`<div style="padding:4px"><${PlayerForm} initial=${p} submitLabel="Save" onCancel=${() => setEditing(null)} onSave=${(v) => { dispatch({ type: 'updatePlayer', id: p.id, patch: { ...v, sample: false } }); setEditing(null); }} /></div>`
         : html`<div class="row">
           <${Avatar} p=${p} />
-          <div class="grow"><div class="name">${p.name}</div><div class="meta">Index ${fmtIndex(p.index)} · CH ${N.courseHandicap(p.index, withTee(state.courses[0] || SAMPLE_COURSE))} at ${(state.courses[0] || SAMPLE_COURSE).name} (${withTee(state.courses[0] || SAMPLE_COURSE).tees})${p.sample ? ' · sample' : ''}${p.userId === user.id ? ' · you' : ''}</div></div>
+          <div class="grow"><div class="name">${p.name}</div><div class="meta">Index ${fmtIndex(p.index)} · CH ${N.courseHandicap(p.index, withTee(state.courses[0] || SAMPLE_COURSE))} at ${(state.courses[0] || SAMPLE_COURSE).name} (${withTee(state.courses[0] || SAMPLE_COURSE).tees})${p.sample ? ' · sample' : ''}${p.userId === user.id ? ' · you' : p.userId ? ' · joined' : ''}</div></div>
+          ${!p.sample && !p.userId && confirm !== p.id && html`<button type="button" class="link" onClick=${() => setInviting(inviting === p.id ? null : p.id)}>Invite</button>`}
           ${confirm === p.id
             ? html`<button type="button" class="btn danger sm" onClick=${() => { dispatch({ type: 'removePlayer', id: p.id }); setConfirm(null); }}>Remove</button>
                    <button type="button" class="btn ghost sm" onClick=${() => setConfirm(null)}>Keep</button>`
             : html`<button type="button" class="link" onClick=${() => setEditing(p.id)}>Edit</button>
                    <button type="button" class="x-btn" aria-label=${`Remove ${p.name}`} onClick=${() => setConfirm(p.id)}>${I.x}</button>`}
-        </div>`)}
+        </div>${inviting === p.id && html`<${InvitePanel} player=${p} group=${syncStatus.group} user=${user} onClose=${() => setInviting(null)} />`}`)}
     </div>
   </main>`;
 }

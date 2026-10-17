@@ -84,6 +84,7 @@ export class Sync {
     const cache = read(cacheKey(userId));
     this.fresh = !cache; // first visit for this user on this device
     this.group = cache?.group ?? null;
+    this.groupName = cache?.groupName ?? null;
     this.outbox = cache?.outbox ?? [];
     this.state = cache?.state ?? seed();
     this.version = 0; // bumps on every local change
@@ -107,14 +108,26 @@ export class Sync {
     return () => this.listeners.delete(fn);
   }
   status() {
-    return { pending: this.outbox.length, offline: this.offline, group: this.group };
+    return { pending: this.outbox.length, offline: this.offline, group: this.group, groupName: this.groupName };
   }
   emit() {
     const st = this.status();
     for (const fn of this.listeners) fn(st);
   }
   persist() {
-    write(cacheKey(this.userId), { v: 2, group: this.group, state: this.state, outbox: this.outbox });
+    write(cacheKey(this.userId), { v: 2, group: this.group, groupName: this.groupName, state: this.state, outbox: this.outbox });
+  }
+
+  /**
+   * Make `groupId` the group this device shows next time a Sync is created for
+   * the user. Queued changes keep the group they were made in.
+   */
+  static useGroup(userId, group) {
+    const cache = read(cacheKey(userId));
+    write(cacheKey(userId), {
+      v: 2, group: group.id, groupName: group.name, outbox: cache?.outbox ?? [],
+      state: { v: 1, players: [], courses: [], rounds: [], ledger: [], payments: [] },
+    });
   }
 
   /** Record new local state and queue the ops that produced it. */
@@ -122,7 +135,8 @@ export class Sync {
     this.state = state;
     if (ops.length) {
       this.version++;
-      this.outbox.push(...ops);
+      // Each op remembers its group, so switching groups can't send it to the wrong one.
+      this.outbox.push(...ops.map((op) => ({ ...op, group: this.group })));
     }
     this.persist();
     if (ops.length) {
@@ -140,10 +154,13 @@ export class Sync {
   async sendAll() {
     clearTimeout(this.retry);
     while (this.outbox.length) {
-      const batch = this.outbox.slice(0, BATCH);
+      const group = this.outbox[0].group ?? null;
+      let n = 0;
+      while (n < Math.min(BATCH, this.outbox.length) && (this.outbox[n].group ?? null) === group) n++;
+      const batch = this.outbox.slice(0, n);
       let res;
       try {
-        res = await api('sync', { method: 'POST', body: { group: this.group, ops: batch } });
+        res = await api('sync', { method: 'POST', body: { group, ops: batch } });
       } catch (e) {
         // Offline, or the server stopped partway: keep everything and try again later.
         this.offline = e instanceof TypeError;
@@ -152,7 +169,7 @@ export class Sync {
         return false;
       }
       if (res.rejected?.length) console.warn('Dormie: server rejected changes', res.rejected);
-      this.group = res.group?.id ?? this.group;
+      if (!this.group && res.group) ({ id: this.group, name: this.groupName } = res.group);
       this.outbox.splice(0, res.done);
       this.offline = false;
       this.persist();
@@ -178,7 +195,7 @@ export class Sync {
       return null;
     }
     if (version !== this.version || this.outbox.length) return null;
-    this.group = res.group.id;
+    ({ id: this.group, name: this.groupName } = res.group);
     this.offline = false;
     const server = res.state;
     // Samples live only on this device. Someone signing in on a new device who

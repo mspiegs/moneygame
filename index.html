@@ -93,6 +93,11 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .me-btn { border-radius: 50%; display: grid; place-items: center; }
 .me-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .signin { justify-content: center; min-height: 100vh; min-height: 100dvh; padding-block: 24px; }
+.invite-card { display: flex; flex-direction: column; gap: 4px; font-size: 14px; color: var(--ink-2); box-shadow: inset 0 0 0 2px var(--accent-soft), var(--shadow); }
+.invite-card b { color: var(--ink); font-size: 15px; }
+.invite-panel { display: flex; flex-direction: column; gap: 10px; padding: 12px 16px 16px; background: var(--surface-2); }
+.card.rows > .invite-panel:last-child { border-radius: 0 0 var(--r) var(--r); }
+.invite-panel .input { background: var(--surface); font-size: 14px; }
 .form-error { font-size: 13.5px; font-weight: 600; color: var(--loss); }
 
 h1.h { font-family: var(--display); font-size: 32px; font-weight: 700; line-height: 1.05; margin: 0; text-wrap: balance; letter-spacing: .005em; }
