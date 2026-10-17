@@ -296,7 +296,7 @@ function Main({ user, onSignOut, onGroup, joined }) {
   const [route, setRoute] = useState({ view: 'home' });
   const go = (r) => { setRoute(r); window.scrollTo(0, 0); };
 
-  if (route.view === 'setup') return html`<${Setup} state=${state} dispatch=${dispatch} go=${go} />`;
+  if (route.view === 'setup') return html`<${Setup} state=${state} dispatch=${dispatch} go=${go} user=${user} />`;
   if (route.view === 'round') {
     const round = state.rounds.find((r) => r.id === route.id);
     if (round) return html`<${Round} round=${round} dispatch=${dispatch} go=${go} />`;
@@ -452,6 +452,10 @@ function Home({ state, dispatch, go, user, syncStatus, joined }) {
       </div>` : html`<div class="card empty-state">Finished rounds land here with who paid whom.</div>`}
     </div>
 
+    ${syncStatus.group && !state.players.some((p) => p.userId === user.id) && html`<${WhoAmI} state=${state} dispatch=${dispatch} user=${user}
+      title="Add yourself" intro=${state.players.some((p) => !p.sample && !p.userId)
+        ? 'You\u2019re not a player in this group yet. If someone already added you, tap your name. Otherwise add yourself.'
+        : 'You\u2019re not a player yet. Add yourself so you can be picked for rounds and see your running tab.'} />`}
     ${joined && html`<div class="banner">${I.check}<span style="flex:1">You joined ${joined}. Its rounds and your tab are here now.</span></div>`}
     ${syncStatus.offline && syncStatus.pending > 0 && html`<div class="banner">${I.info}<span style="flex:1">You're offline. ${syncStatus.pending} ${syncStatus.pending === 1 ? 'change is' : 'changes are'} saved on this phone and will sync when you have signal.</span></div>`}
 
@@ -512,13 +516,14 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const owedLabel = (v, name) => (v > 0 ? `${first(name)} owes you` : v < 0 ? `You owe ${first(name)}` : 'All square');
 
 /** "Which player are you?" Links the account to a player so money can be shown from their side. */
-function WhoAmI({ state, dispatch, user, onDone }) {
+function WhoAmI({ state, dispatch, user, onDone, title = 'Which player are you?',
+  intro = 'Pick yourself so Dormie can show what you\u2019ve won and lost against each player.' }) {
   const [adding, setAdding] = useState(false);
   const options = state.players.filter((p) => !p.sample && (!p.userId || p.userId === user.id));
   const claim = (id) => { dispatch({ type: 'claimPlayer', id, userId: user.id }); onDone?.(); };
   return html`<div class="section">
-    <div class="section-head"><h2>Which player are you?</h2></div>
-    <p class="sub" style="margin:0">Pick yourself so Dormie can show what you've won and lost against each player.</p>
+    <div class="section-head"><h2>${title}</h2></div>
+    <p class="sub" style="margin:0">${intro}</p>
     ${options.length > 0 && html`<div class="card rows">${options.map((p) => html`
       <button type="button" class="row" onClick=${() => claim(p.id)}>
         <${Avatar} p=${p} /><div class="grow"><div class="name">${p.name}</div><div class="meta">Index ${fmtIndex(p.index)}</div></div>
@@ -759,9 +764,10 @@ function Courses({ state, dispatch }) {
 // ---------- New round setup ----------
 const MAX_PLAYERS = 5;
 
-function Setup({ state, dispatch, go }) {
+function Setup({ state, dispatch, go, user }) {
   const [step, setStep] = useState(0);
-  const [ids, setIds] = useState([]);
+  // You're almost always playing: start with yourself picked.
+  const [ids, setIds] = useState(() => state.players.filter((p) => p.userId === user.id).map((p) => p.id));
   const [courseId, setCourseId] = useState(state.courses[0]?.id);
   const [teeId, setTeeId] = useState(state.courses[0]?.lastTee);
   const [wheel, setWheel] = useState([]);
