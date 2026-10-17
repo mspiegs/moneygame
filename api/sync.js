@@ -1,6 +1,7 @@
 import { authed } from './_lib/auth.js';
 import { db, handle, HttpError, json } from './_lib/db.js';
 import { resolveGroup } from './_lib/groups.js';
+import { refreshLedger } from './_lib/rounds.js';
 
 // POST /api/sync { group?, ops: [{ type, ... }] }
 //
@@ -130,10 +131,13 @@ const handlers = {
           ${presses.map((p) => p[3])}::int[], ${presses.map((p) => p[4])}::text[]) as t(pid, mid, seg, start, side)
         on conflict (id) do nothing`,
     ]);
+    await refreshLedger(sql, id);
   },
 
   async 'round.delete'(sql, g, user, { roundId }) {
-    await sql`update rounds set deleted_at = now(), updated_at = now() where id = ${str(roundId, 'roundId')} and group_id = ${g}`;
+    await requireRound(sql, roundId, g);
+    await sql`update rounds set deleted_at = now(), updated_at = now() where id = ${roundId}`;
+    await refreshLedger(sql, roundId);
   },
 
   async 'round.hole'(sql, g, user, { roundId, hole }) {
@@ -146,6 +150,7 @@ const handlers = {
     await sql`update rounds set status = ${status}, updated_at = now(),
         finished_at = case when ${status} = 'final' then coalesce(finished_at, now()) else null end
       where id = ${str(roundId, 'roundId')} and group_id = ${g}`;
+    await refreshLedger(sql, roundId);
   },
 
   async 'score.set'(sql, g, user, { roundId, pid, hole, value }) {
@@ -158,6 +163,7 @@ const handlers = {
         values (${roundId}, ${str(pid, 'pid')}, ${hole}, ${int(value, 'score', 1, 20)}, ${user.id})
         on conflict (round_id, player_id, hole) do update set gross = excluded.gross, updated_by = excluded.updated_by, updated_at = now()`;
     }
+    await refreshLedger(sql, roundId);
   },
 
   async 'press.add'(sql, g, user, { roundId, press: p }) {
@@ -167,11 +173,42 @@ const handlers = {
     await sql`insert into presses (id, round_id, match_id, segment, start_hole, by_side, created_by)
       values (${str(p.id, 'press.id')}, ${roundId}, ${str(p.matchId, 'press.matchId')}, ${p.segment}, ${int(p.start, 'press.start', 0, 17)}, ${p.by}, ${user.id})
       on conflict (id) do nothing`;
+    await refreshLedger(sql, roundId);
   },
 
   async 'press.remove'(sql, g, user, { roundId, pressId }) {
     await requireRound(sql, roundId, g);
     await sql`delete from presses where id = ${str(pressId, 'pressId')} and round_id = ${roundId}`;
+    await refreshLedger(sql, roundId);
+  },
+
+  /** "This player is me": links the signed-in user to one player in the group. */
+  async 'player.claim'(sql, g, user, { id }) {
+    const [p] = await sql`select group_id, user_id from players where id = ${str(id, 'id')}`;
+    if (!p || p.group_id !== g) throw new HttpError(404, 'Player not found');
+    if (p.user_id && p.user_id !== user.id) throw new HttpError(409, 'Someone else already claimed that player');
+    await sql.transaction([
+      sql`update players set user_id = null, updated_at = now() where group_id = ${g} and user_id = ${user.id} and id <> ${id}`,
+      sql`update players set user_id = ${user.id}, updated_at = now() where id = ${id}`,
+    ]);
+  },
+
+  async 'payment.add'(sql, g, user, { payment: p }) {
+    const id = str(p?.id, 'payment.id');
+    const from = str(p.from, 'payment.from');
+    const to = str(p.to, 'payment.to');
+    if (from === to) bad('A player can\u2019t pay themselves');
+    const amount = Number.isFinite(p.amount) && p.amount > 0 && p.amount <= 100000 ? Math.round(p.amount * 100) / 100 : bad('amount must be between 0 and 100,000');
+    const players = await sql`select id from players where group_id = ${g} and id in (${from}, ${to})`;
+    if (players.length !== 2) throw new HttpError(403, 'Both players must be in this group');
+    const paidAt = new Date(Number.isFinite(p.paidAt) ? p.paidAt : Date.now()).toISOString();
+    await sql`insert into payments (id, group_id, from_id, to_id, amount, round_id, note, paid_at, recorded_by)
+      values (${id}, ${g}, ${from}, ${to}, ${amount}, ${p.roundId ?? null}, ${typeof p.note === 'string' ? p.note.slice(0, 200) : null}, ${paidAt}, ${user.id})
+      on conflict (id) do nothing`;
+  },
+
+  async 'payment.remove'(sql, g, user, { id }) {
+    await sql`delete from payments where id = ${str(id, 'id')} and group_id = ${g}`;
   },
 };
 

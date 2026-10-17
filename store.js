@@ -56,6 +56,9 @@ export function opsFor(a, s) {
     case 'addPress': return [{ type: 'press.add', roundId: a.roundId, press: a.press }];
     case 'removePress': return [{ type: 'press.remove', roundId: a.roundId, pressId: a.pressId }];
     case 'setStatus': return [{ type: 'round.status', roundId: a.roundId, status: a.status }];
+    case 'claimPlayer': return isSample(s.players.find((p) => p.id === a.id)) ? [] : [{ type: 'player.claim', id: a.id }];
+    case 'addPayment': return [{ type: 'payment.add', payment: a.payment }];
+    case 'removePayment': return [{ type: 'payment.remove', id: a.id }];
     default: return [];
   }
 }
@@ -189,6 +192,8 @@ export class Sync {
       players: [...server.players, ...extra('players')],
       courses: [...server.courses, ...extra('courses')],
       rounds: [...extra('rounds'), ...server.rounds],
+      ledger: server.ledger,
+      payments: server.payments,
     };
     this.state = state;
     this.persist();

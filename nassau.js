@@ -273,6 +273,39 @@ export function settleRound(round) {
   return { settled, projected, matches };
 }
 
+/**
+ * Who won what from whom in a round, netted per pair of players:
+ * [{ winner, loser, amount }]. Each loser of a bet pays each winner an equal
+ * share (stake ÷ number of losers), which adds up to the same per-player
+ * totals as settleRound. `projected` counts every started bet as if the
+ * round ended now; otherwise only finished bets count.
+ */
+export function pairwiseRound(round, { projected = false } = {}) {
+  const net = new Map(); // "a|b" (a < b) -> what a won from b
+  for (const m of round.game.matches) {
+    for (const s of computeMatch(round, m).segments)
+      for (const b of s.bets) {
+        const result = projected ? (b.started ? sign(b.score) : 0) : b.result;
+        if (!result) continue;
+        const winners = result > 0 ? m.a : m.b;
+        const losers = result > 0 ? m.b : m.a;
+        const share = b.stake / losers.length;
+        for (const w of winners)
+          for (const l of losers) {
+            const key = w < l ? `${w}|${l}` : `${l}|${w}`;
+            net.set(key, (net.get(key) || 0) + (w < l ? share : -share));
+          }
+      }
+  }
+  const out = [];
+  for (const [key, v] of net) {
+    const [a, b] = key.split('|');
+    const amount = Math.round(Math.abs(v) * 100) / 100;
+    if (amount) out.push(v > 0 ? { winner: a, loser: b, amount } : { winner: b, loser: a, amount });
+  }
+  return out;
+}
+
 /** Fewest payments to square up. Input: { id: balance }. */
 export function settleUp(balances) {
   const cents = Object.entries(balances).map(([id, v]) => ({ id, v: Math.round(v * 100) }));

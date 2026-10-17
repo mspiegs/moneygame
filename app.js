@@ -103,7 +103,7 @@ function sampleRound() {
 
 /** Starter state with samples. Ids get a per-device suffix so samples never collide across accounts once saved. */
 function seed() {
-  const s = { v: 1, players: SAMPLE_PLAYERS, courses: [SAMPLE_COURSE], rounds: [sampleRound()] };
+  const s = { v: 1, players: SAMPLE_PLAYERS, courses: [SAMPLE_COURSE], rounds: [sampleRound()], ledger: [], payments: [] };
   const suffix = uid('');
   return JSON.parse(JSON.stringify(s).replace(/"((?:p|t)-[a-z]+|c-sample|r-sample|pr-sample)"/g, `"$1-${suffix}"`));
 }
@@ -151,6 +151,11 @@ function reducer(s, a) {
     case 'addPress': return mapRound((r) => ({ ...r, presses: [...r.presses, a.press] }));
     case 'removePress': return mapRound((r) => ({ ...r, presses: r.presses.filter((p) => p.id !== a.pressId) }));
     case 'setStatus': return mapRound((r) => ({ ...r, status: a.status }));
+    case 'claimPlayer': return {
+      ...s, players: s.players.map((p) => (p.id === a.id ? { ...p, userId: a.userId } : p.userId === a.userId ? { ...p, userId: null } : p)),
+    };
+    case 'addPayment': return { ...s, payments: [a.payment, ...(s.payments || [])] };
+    case 'removePayment': return { ...s, payments: (s.payments || []).filter((p) => p.id !== a.id) };
     case 'reset': return seed();
     case 'replace': return { ...s, ...a.state };
     case 'clearSamples': {
@@ -210,6 +215,8 @@ function App() {
   return html`<${Main} user=${user} onSignOut=${async () => { await A.signOut(); setUser(null); }} />`;
 }
 
+const tabFor = (view) => (view === 'opponent' ? 'money' : ['money', 'players', 'courses'].includes(view) ? view : 'home');
+
 // While a round is live, check for scores entered on other phones this often.
 const LIVE_PULL_MS = 20_000;
 
@@ -256,12 +263,14 @@ function Main({ user, onSignOut }) {
   }
   return html`<div class="app">
     ${route.view === 'account' ? html`<${Account} user=${user} onSignOut=${onSignOut} go=${go} />`
-      : route.view === 'players' ? html`<${Players} state=${state} dispatch=${dispatch} />`
+      : route.view === 'money' ? html`<${Money} state=${state} dispatch=${dispatch} user=${user} go=${go} />`
+      : route.view === 'opponent' ? html`<${Opponent} state=${state} dispatch=${dispatch} user=${user} go=${go} id=${route.id} />`
+      : route.view === 'players' ? html`<${Players} state=${state} dispatch=${dispatch} user=${user} />`
       : route.view === 'courses' ? html`<${Courses} state=${state} dispatch=${dispatch} />`
       : html`<${Home} state=${state} dispatch=${dispatch} go=${go} user=${user} syncStatus=${syncStatus} />`}
     <nav class="tabbar" aria-label="Main"><div class="tabbar-inner">
-      ${[['home', 'Rounds', I.home], ['players', 'Players', I.users], ['courses', 'Courses', I.pin]].map(([v, l, ic]) => html`
-        <button type="button" aria-current=${route.view === v || (v === 'home' && !['players', 'courses', 'account'].includes(route.view)) ? 'page' : null} onClick=${() => go({ view: v })}>${ic}${l}</button>`)}
+      ${[['home', 'Rounds', I.home], ['money', 'Money', I.cash], ['players', 'Players', I.users], ['courses', 'Courses', I.pin]].map(([v, l, ic]) => html`
+        <button type="button" aria-current=${tabFor(route.view) === v ? 'page' : null} onClick=${() => go({ view: v })}>${ic}${l}</button>`)}
     </div></nav>
   </div>`;
 }
@@ -388,6 +397,174 @@ function Home({ state, dispatch, go, user, syncStatus }) {
   </main>`;
 }
 
+// ---------- Money ----------
+/**
+ * My running tab with everyone I've played, from my side (+ means they owe me):
+ * [{ id, name, color, net, paidIn, paidOut, owed, live, history }], biggest balances first.
+ * Finished rounds use the ledger the server froze at finish; rounds finished on
+ * this device but not yet synced are worked out here with the same engine.
+ */
+function moneyBook(state, meId) {
+  const people = new Map();
+  const person = (id, fallback) => {
+    if (!people.has(id)) {
+      const p = state.players.find((x) => x.id === id) || fallback || { name: 'Unknown', color: 'var(--ink-3)' };
+      people.set(id, { id, name: p.name, color: p.color, net: 0, paidIn: 0, paidOut: 0, live: 0, history: [] });
+    }
+    return people.get(id);
+  };
+  const frozen = new Map();
+  for (const e of state.ledger || []) {
+    if (!frozen.has(e.roundId)) frozen.set(e.roundId, []);
+    frozen.get(e.roundId).push(e);
+  }
+  for (const r of state.rounds) {
+    if (r.sample || !r.players.some((p) => p.id === meId)) continue;
+    const final = r.status === 'final';
+    const rows = final ? (frozen.get(r.id) ?? N.pairwiseRound(r)) : N.pairwiseRound(r, { projected: true });
+    for (const opp of r.players) {
+      if (opp.id === meId) continue;
+      const e = rows.find((x) => (x.winner === meId && x.loser === opp.id) || (x.loser === meId && x.winner === opp.id));
+      const amount = !e ? 0 : e.winner === meId ? e.amount : -e.amount;
+      const p = person(opp.id, opp);
+      if (final) p.net += amount;
+      else p.live += amount;
+      p.history.push({ kind: 'round', at: r.createdAt, round: r, amount, live: !final });
+    }
+  }
+  for (const pay of state.payments || []) {
+    if (pay.from !== meId && pay.to !== meId) continue;
+    const mine = pay.from === meId;
+    const p = person(mine ? pay.to : pay.from);
+    if (mine) p.paidOut += pay.amount;
+    else p.paidIn += pay.amount;
+    p.history.push({ kind: 'payment', at: pay.paidAt, payment: pay, amount: mine ? pay.amount : -pay.amount });
+  }
+  return [...people.values()]
+    .map((p) => ({ ...p, owed: Math.round((p.net + p.paidOut - p.paidIn) * 100) / 100, history: p.history.sort((a, b) => b.at - a.at) }))
+    .sort((a, b) => Math.abs(b.owed) - Math.abs(a.owed) || Math.abs(b.net) - Math.abs(a.net) || a.name.localeCompare(b.name));
+}
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+const owedLabel = (v, name) => (v > 0 ? `${first(name)} owes you` : v < 0 ? `You owe ${first(name)}` : 'All square');
+
+/** "Which player are you?" Links the account to a player so money can be shown from their side. */
+function WhoAmI({ state, dispatch, user, onDone }) {
+  const [adding, setAdding] = useState(false);
+  const options = state.players.filter((p) => !p.sample && (!p.userId || p.userId === user.id));
+  const claim = (id) => { dispatch({ type: 'claimPlayer', id, userId: user.id }); onDone?.(); };
+  return html`<div class="section">
+    <div class="section-head"><h2>Which player are you?</h2></div>
+    <p class="sub" style="margin:0">Pick yourself so Dormie can show what you've won and lost against each player.</p>
+    ${options.length > 0 && html`<div class="card rows">${options.map((p) => html`
+      <button type="button" class="row" onClick=${() => claim(p.id)}>
+        <${Avatar} p=${p} /><div class="grow"><div class="name">${p.name}</div><div class="meta">Index ${fmtIndex(p.index)}</div></div>
+        <span class="link">That's me</span>
+      </button>`)}</div>`}
+    ${adding
+      ? html`<${PlayerForm} initial=${{ name: user.name || '', index: '' }} submitLabel="Add me" onCancel=${() => setAdding(false)}
+          onSave=${(v) => { const id = uid('p-'); dispatch({ type: 'addPlayer', player: { id, color: COLORS[state.players.length % COLORS.length], ...v } }); claim(id); }} />`
+      : html`<button type="button" class="btn soft block" onClick=${() => setAdding(true)}>${I.plus} I'm not listed. Add me</button>`}
+  </div>`;
+}
+
+function Money({ state, dispatch, user, go }) {
+  const me = state.players.find((p) => p.userId === user.id);
+  const [choosing, setChoosing] = useState(false);
+  const book = useMemo(() => (me ? moneyBook(state, me.id) : []), [state, me?.id]);
+  const lifetime = sum(book.map((p) => p.net));
+  const owed = sum(book.map((p) => p.owed));
+  const live = sum(book.map((p) => p.live));
+  return html`<main class="page fade-in">
+    <div><h1 class="h">Money</h1><p class="sub">Your running tab with everyone you've played.</p></div>
+    ${!me || choosing ? html`<${WhoAmI} state=${state} dispatch=${dispatch} user=${user} onDone=${() => setChoosing(false)} />` : html`
+      <div class="board">
+        <div class="board-head"><span class="board-title">Your tab</span><span class="board-tag">${first(me.name)}</span></div>
+        <div class="board-rows">
+          <div class="board-row" style="grid-template-columns:1fr auto"><span class="pname">Lifetime</span><span class=${`tile ${lifetime < 0 ? 'down' : 'up'}`} style="min-width:84px">${money(lifetime)}</span></div>
+          <div class="board-row" style="grid-template-columns:1fr auto"><span class="pname">${owed < 0 ? 'You owe' : 'Owed to you'}</span><span class=${`tile ${owed < 0 ? 'down' : 'up'}`} style="min-width:84px">${money(owed, { sign: false })}</span></div>
+          ${live !== 0 && html`<div class="board-row" style="grid-template-columns:1fr auto"><span class="pname">In play now</span><span class=${`tile ${live < 0 ? 'down' : 'up'}`} style="min-width:84px">${money(live)}</span></div>`}
+        </div>
+      </div>
+      <div class="section">
+        <div class="section-head"><h2>By player</h2><span class="meta">what's owed now</span></div>
+        ${book.length ? html`<div class="card rows">${book.map((p) => html`
+          <button type="button" class="row" onClick=${() => go({ view: 'opponent', id: p.id })}>
+            <${Avatar} p=${p} />
+            <div class="grow"><div class="name">${p.name}</div>
+              <div class="meta">${plural(p.history.filter((h) => h.kind === 'round' && !h.live).length, 'round')} · lifetime ${money(p.net)}${p.live ? ` · ${money(p.live)} in play` : ''}</div></div>
+            <div class="owed"><b class=${p.owed > 0 ? 'c-win' : p.owed < 0 ? 'c-loss' : 'c-n'}>${p.owed ? money(Math.abs(p.owed), { sign: false }) : 'Square'}</b><small>${p.owed > 0 ? 'owes you' : p.owed < 0 ? 'you owe' : ''}</small></div>
+          </button>`)}</div>`
+          : html`<div class="card empty-state">Finish a round you played in and your tab with each player shows up here.</div>`}
+      </div>
+      <p class="note" style="text-align:center">Playing as ${me.name}. <button type="button" class="link" onClick=${() => setChoosing(true)}>Change</button></p>`}
+  </main>`;
+}
+
+function PaymentForm({ opp, owed, onSave, onCancel }) {
+  // Default to settling the current balance in whichever direction it runs.
+  const [dir, setDir] = useState(owed < 0 ? 'out' : 'in');
+  const [amt, setAmt] = useState(owed ? String(Math.abs(owed)) : '');
+  const [note, setNote] = useState('');
+  const amount = Math.round(parseFloat(amt) * 100) / 100;
+  const valid = amount > 0 && amount <= 100000;
+  return html`<form class="card pad" style="display:flex;flex-direction:column;gap:12px" onSubmit=${(e) => { e.preventDefault(); if (valid) onSave({ dir, amount, note: note.trim() || null }); }}>
+    <${Seg} value=${dir} onChange=${setDir} options=${[{ value: 'in', label: `${first(opp.name)} paid me` }, { value: 'out', label: `I paid ${first(opp.name)}` }]} />
+    <div class="form-grid">
+      <div class="field"><label for="pay-amt">Amount</label><input id="pay-amt" class="input" inputmode="decimal" value=${amt} onInput=${(e) => setAmt(e.target.value.replace(/[^0-9.]/g, ''))} placeholder="40" /></div>
+      <div class="field"><label for="pay-note">Note</label><input id="pay-note" class="input" value=${note} onInput=${(e) => setNote(e.target.value)} placeholder="Venmo" maxlength="200" /></div>
+    </div>
+    <div style="display:flex;gap:10px">
+      <button type="button" class="btn ghost" onClick=${onCancel}>Cancel</button>
+      <button class="btn primary" style="flex:1" disabled=${!valid}>Record ${valid ? money(amount, { sign: false }) : 'payment'}</button>
+    </div>
+  </form>`;
+}
+
+function Opponent({ state, dispatch, user, go, id }) {
+  const me = state.players.find((p) => p.userId === user.id);
+  const opp = useMemo(() => (me ? moneyBook(state, me.id).find((p) => p.id === id) : null), [state, me?.id, id]);
+  const [paying, setPaying] = useState(false);
+  const [confirm, setConfirm] = useState(null);
+  if (!opp) return html`<main class="page"><button type="button" class="btn ghost" onClick=${() => go({ view: 'money' })}>Back to Money</button></main>`;
+  return html`<main class="page fade-in">
+    <header class="topbar">
+      <button type="button" class="icon-btn" aria-label="Back" onClick=${() => go({ view: 'money' })}>${I.back}</button>
+      <div class="title"><b>You vs ${opp.name}</b><span>${owedLabel(opp.owed, opp.name)}</span></div>
+      <span class="icon-btn"></span>
+    </header>
+    <div class="stats card">
+      <div><small>Lifetime</small><b class=${opp.net > 0 ? 'c-win' : opp.net < 0 ? 'c-loss' : ''}>${money(opp.net)}</b></div>
+      <div><small>${opp.paidOut > opp.paidIn ? 'You paid' : 'Received'}</small><b>${money(Math.abs(opp.paidIn - opp.paidOut), { sign: false })}</b></div>
+      <div><small>${opp.owed < 0 ? 'You owe' : 'Owed to you'}</small><b class=${opp.owed > 0 ? 'c-win' : opp.owed < 0 ? 'c-loss' : ''}>${money(Math.abs(opp.owed), { sign: false })}</b></div>
+    </div>
+    ${opp.live !== 0 && html`<div class="banner">${I.info}<span>${money(opp.live)} in play right now. It counts once the round is finished.</span></div>`}
+    ${paying
+      ? html`<${PaymentForm} opp=${opp} owed=${opp.owed} onCancel=${() => setPaying(false)} onSave=${({ dir, amount, note }) => {
+          dispatch({ type: 'addPayment', payment: { id: uid('pay-'), from: dir === 'in' ? opp.id : me.id, to: dir === 'in' ? me.id : opp.id, amount, note, paidAt: Date.now() } });
+          setPaying(false);
+        }} />`
+      : html`<button type="button" class="btn primary block" onClick=${() => setPaying(true)}>${I.cash} Record a payment</button>`}
+    <div class="section">
+      <div class="section-head"><h2>History</h2></div>
+      <div class="card rows">${opp.history.map((h) => h.kind === 'round'
+        ? html`<button type="button" class="row" onClick=${() => go({ view: 'round', id: h.round.id })}>
+            <div class="grow"><div class="name">${h.round.course.name}</div><div class="meta">${dateLabel(h.at)}${h.live ? ' · in play' : ''}</div></div>
+            <b class=${`amt ${h.amount > 0 ? 'c-win' : h.amount < 0 ? 'c-loss' : 'c-n'}`}>${h.amount ? money(h.amount) : 'Square'}</b>
+          </button>`
+        : html`<div class="row">
+            <div class="grow"><div class="name">${h.amount > 0 ? `You paid ${first(opp.name)}` : `${first(opp.name)} paid you`}</div>
+              <div class="meta">${dateLabel(h.at)}${h.payment.note ? ` · ${h.payment.note}` : ''}</div></div>
+            ${confirm === h.payment.id
+              ? html`<button type="button" class="btn danger sm" onClick=${() => { dispatch({ type: 'removePayment', id: h.payment.id }); setConfirm(null); }}>Remove</button>
+                     <button type="button" class="btn ghost sm" onClick=${() => setConfirm(null)}>Keep</button>`
+              : html`<b class="amt">${money(Math.abs(h.amount), { sign: false })}</b>
+                     <button type="button" class="x-btn" aria-label="Remove payment" onClick=${() => setConfirm(h.payment.id)}>${I.x}</button>`}
+          </div>`)}</div>
+    </div>
+  </main>`;
+}
+
 // ---------- Players ----------
 function PlayerForm({ initial, onSave, onCancel, submitLabel = 'Add player' }) {
   const [name, setName] = useState(initial?.name ?? '');
@@ -407,7 +584,7 @@ function PlayerForm({ initial, onSave, onCancel, submitLabel = 'Add player' }) {
   </form>`;
 }
 
-function Players({ state, dispatch }) {
+function Players({ state, dispatch, user }) {
   const [editing, setEditing] = useState(null);
   const [adding, setAdding] = useState(false);
   const [confirm, setConfirm] = useState(null);
@@ -420,7 +597,7 @@ function Players({ state, dispatch }) {
         ? html`<div style="padding:4px"><${PlayerForm} initial=${p} submitLabel="Save" onCancel=${() => setEditing(null)} onSave=${(v) => { dispatch({ type: 'updatePlayer', id: p.id, patch: { ...v, sample: false } }); setEditing(null); }} /></div>`
         : html`<div class="row">
           <${Avatar} p=${p} />
-          <div class="grow"><div class="name">${p.name}</div><div class="meta">Index ${fmtIndex(p.index)} · CH ${N.courseHandicap(p.index, withTee(state.courses[0] || SAMPLE_COURSE))} at ${(state.courses[0] || SAMPLE_COURSE).name} (${withTee(state.courses[0] || SAMPLE_COURSE).tees})${p.sample ? ' · sample' : ''}</div></div>
+          <div class="grow"><div class="name">${p.name}</div><div class="meta">Index ${fmtIndex(p.index)} · CH ${N.courseHandicap(p.index, withTee(state.courses[0] || SAMPLE_COURSE))} at ${(state.courses[0] || SAMPLE_COURSE).name} (${withTee(state.courses[0] || SAMPLE_COURSE).tees})${p.sample ? ' · sample' : ''}${p.userId === user.id ? ' · you' : ''}</div></div>
           ${confirm === p.id
             ? html`<button type="button" class="btn danger sm" onClick=${() => { dispatch({ type: 'removePlayer', id: p.id }); setConfirm(null); }}>Remove</button>
                    <button type="button" class="btn ghost sm" onClick=${() => setConfirm(null)}>Keep</button>`
