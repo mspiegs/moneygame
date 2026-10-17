@@ -6,7 +6,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "node --env-file-if-exists=.env scripts/dev.js",
+    "dev": "node --watch --env-file-if-exists=.env scripts/dev.js",
     "migrate": "node --env-file-if-exists=.env scripts/migrate.js"
   },
   "dependencies": {

@@ -1,6 +1,7 @@
 import { html, render, useState, useReducer, useEffect, useMemo, useRef } from 'https://cdn.jsdelivr.net/npm/htm@3.1.1/preact/standalone.module.js';
 import * as N from './nassau.js';
 import * as A from './auth.js';
+import { Sync, opsFor } from './store.js';
 
 // ---------- Icons ----------
 const I = {
@@ -100,13 +101,16 @@ function sampleRound() {
   };
 }
 
+/** Starter state with samples. Ids get a per-device suffix so samples never collide across accounts once saved. */
 function seed() {
-  return { v: 1, players: SAMPLE_PLAYERS, courses: [SAMPLE_COURSE], rounds: [sampleRound()] };
+  const s = { v: 1, players: SAMPLE_PLAYERS, courses: [SAMPLE_COURSE], rounds: [sampleRound()] };
+  const suffix = uid('');
+  return JSON.parse(JSON.stringify(s).replace(/"((?:p|t)-[a-z]+|c-sample|r-sample|pr-sample)"/g, `"$1-${suffix}"`));
 }
-const KEY = 'dormie.v1';
-function load() {
+/** Data saved by the app before accounts existed, if any (imported once on sign-in). */
+function loadV1() {
   try {
-    const s = JSON.parse(localStorage.getItem(KEY));
+    const s = JSON.parse(localStorage.getItem('dormie.v1'));
     if (s && s.v === 1) {
       s.courses = s.courses.map((c) => (c.teeSets ? c : {
         ...c, teeSets: c.id === SAMPLE_COURSE.id ? SAMPLE_COURSE.teeSets : [{ id: uid('t-'), name: c.tees || 'Default', rating: c.rating, slope: c.slope }],
@@ -114,10 +118,7 @@ function load() {
       return s;
     }
   } catch {}
-  return seed();
-}
-function save(s) {
-  try { localStorage.setItem(KEY, JSON.stringify(s)); } catch {}
+  return null;
 }
 
 function reducer(s, a) {
@@ -151,6 +152,7 @@ function reducer(s, a) {
     case 'removePress': return mapRound((r) => ({ ...r, presses: r.presses.filter((p) => p.id !== a.pressId) }));
     case 'setStatus': return mapRound((r) => ({ ...r, status: a.status }));
     case 'reset': return seed();
+    case 'replace': return { ...s, ...a.state };
     case 'clearSamples': {
       const courses = s.courses.filter((c) => !c.sample);
       return { ...s, players: s.players.filter((p) => !p.sample), rounds: s.rounds.filter((r) => !r.sample), courses: courses.length ? courses : s.courses };
@@ -208,9 +210,42 @@ function App() {
   return html`<${Main} user=${user} onSignOut=${async () => { await A.signOut(); setUser(null); }} />`;
 }
 
+// While a round is live, check for scores entered on other phones this often.
+const LIVE_PULL_MS = 20_000;
+
 function Main({ user, onSignOut }) {
-  const [state, dispatch] = useReducer(reducer, null, load);
-  useEffect(() => save(state), [state]);
+  const sync = useMemo(() => new Sync(user.id, { seed, loadV1 }), [user.id]);
+  const [state, apply] = useReducer(reducer, null, () => sync.state);
+  const latest = useRef(state);
+  latest.current = state;
+  const pendingOps = useRef([]);
+  // Every change goes through here: queue its server ops, then update the UI.
+  const dispatch = (a) => {
+    pendingOps.current.push(...opsFor(a, latest.current));
+    apply(a);
+  };
+  useEffect(() => {
+    sync.commit(state, pendingOps.current);
+    pendingOps.current = [];
+  }, [state]);
+
+  const [syncStatus, setSyncStatus] = useState(sync.status());
+  useEffect(() => {
+    const off = sync.subscribe(setSyncStatus);
+    const pull = async () => {
+      const next = await sync.pull();
+      if (next) apply({ type: 'replace', state: next });
+    };
+    pull();
+    const onVisible = () => document.visibilityState === 'visible' && pull();
+    const onOnline = () => pull();
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('online', onOnline);
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible' && latest.current.rounds.some((r) => r.status === 'live' && !r.sample)) pull();
+    }, LIVE_PULL_MS);
+    return () => { off(); clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); window.removeEventListener('online', onOnline); };
+  }, [sync]);
   const [route, setRoute] = useState({ view: 'home' });
   const go = (r) => { setRoute(r); window.scrollTo(0, 0); };
 
@@ -223,7 +258,7 @@ function Main({ user, onSignOut }) {
     ${route.view === 'account' ? html`<${Account} user=${user} onSignOut=${onSignOut} go=${go} />`
       : route.view === 'players' ? html`<${Players} state=${state} dispatch=${dispatch} />`
       : route.view === 'courses' ? html`<${Courses} state=${state} dispatch=${dispatch} />`
-      : html`<${Home} state=${state} dispatch=${dispatch} go=${go} user=${user} />`}
+      : html`<${Home} state=${state} dispatch=${dispatch} go=${go} user=${user} syncStatus=${syncStatus} />`}
     <nav class="tabbar" aria-label="Main"><div class="tabbar-inner">
       ${[['home', 'Rounds', I.home], ['players', 'Players', I.users], ['courses', 'Courses', I.pin]].map(([v, l, ic]) => html`
         <button type="button" aria-current=${route.view === v || (v === 'home' && !['players', 'courses', 'account'].includes(route.view)) ? 'page' : null} onClick=${() => go({ view: v })}>${ic}${l}</button>`)}
@@ -311,7 +346,7 @@ function Scoreboard({ round, onOpen }) {
   </button>`;
 }
 
-function Home({ state, dispatch, go, user }) {
+function Home({ state, dispatch, go, user, syncStatus }) {
   const live = state.rounds.filter((r) => r.status === 'live');
   const past = state.rounds.filter((r) => r.status !== 'live');
   const hasSample = state.rounds.some((r) => r.sample) || state.players.some((p) => p.sample);
@@ -345,6 +380,8 @@ function Home({ state, dispatch, go, user }) {
         })}
       </div>` : html`<div class="card empty-state">Finished rounds land here with who paid whom.</div>`}
     </div>
+
+    ${syncStatus.offline && syncStatus.pending > 0 && html`<div class="banner">${I.info}<span style="flex:1">You're offline. ${syncStatus.pending} ${syncStatus.pending === 1 ? 'change is' : 'changes are'} saved on this phone and will sync when you have signal.</span></div>`}
 
     ${hasSample && html`<div class="banner">${I.info}<span style="flex:1">The group and round here are samples so you can see how it works. Add your own players, then clear them out.</span>
       <button type="button" class="link" onClick=${() => dispatch({ type: 'clearSamples' })}>Clear samples</button></div>`}

@@ -16,8 +16,8 @@ async function api(req, res, path) {
   if (!/^[a-z0-9-]+(\/[a-z0-9-]+)*$/.test(name)) return send(res, 404, 'Not found');
   let mod;
   try {
-    // Cache-bust so edits to API files take effect without restarting.
-    mod = await import(`${join(root, 'api', name)}.js?t=${Date.now()}`);
+    // `node --watch` (npm run dev) restarts the server when an API file changes.
+    mod = await import(`${join(root, 'api', name)}.js`);
   } catch (e) {
     if (e.code === 'ERR_MODULE_NOT_FOUND') return send(res, 404, 'Not found');
     throw e;
