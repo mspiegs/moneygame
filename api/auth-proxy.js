@@ -13,6 +13,9 @@ async function proxy(request) {
 
   const headers = new Headers(request.headers);
   for (const h of hopHeaders) headers.delete(h);
+  // Our host's proxy headers (Vercel's x-forwarded-host etc.) make Neon Auth reject
+  // the request as coming from the wrong hostname; it should see a plain client request.
+  for (const h of [...headers.keys()]) if (h.startsWith('x-forwarded-') || h.startsWith('x-vercel-') || h === 'forwarded' || h === 'x-real-ip') headers.delete(h);
   // Plain-http dev (e.g. a phone on the LAN) can't hold __Secure- cookies, so
   // there they travel without the prefix and get it back on the way upstream.
   const insecure = url.protocol === 'http:';

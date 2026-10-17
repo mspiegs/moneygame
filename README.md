@@ -30,3 +30,14 @@ npm run dev
 Then open http://localhost:8017. `/api/health` reports whether the database is reachable.
 
 Sign-in is Neon Auth (managed Better Auth). The browser talks to it through `/api/auth/*`, which `api/auth-proxy.js` forwards to `NEON_AUTH_URL` so the session cookie stays first-party (Safari drops third-party cookies). API endpoints check a short-lived JWT from that session; wrap a handler in `authed()` from `api/_lib/auth.js` to require a signed-in user. Data is saved to Neon per group. The app also keeps a copy in localStorage so it opens and scores with no signal; changes made offline sync when the connection returns. Sample players, courses and the sample round stay on the device and are never uploaded. Data saved by the old signed-out version (`dormie.v1`) is uploaded once, the first time someone signs in on that browser.
+
+## Deploy
+
+Hosted on Vercel (project `dormie`, production at https://dormie-gold.vercel.app). Static files at the repo root are served as-is and `api/*.js` become functions; `.vercelignore` keeps `.env`, `db/` and `scripts/` from being uploaded.
+
+```bash
+vercel --prod
+```
+
+Production needs `DATABASE_URL` and `NEON_AUTH_URL` set in Vercel. Any new domain the app is served from must be added to Neon Auth's trusted domains, or sign-in fails.
+

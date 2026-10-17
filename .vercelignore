@@ -1,0 +1,9 @@
+# Never upload secrets or dev-only files; everything uploaded at the root is publicly served.
+.env
+.env.*
+.claude/
+.git/
+node_modules/
+db/
+scripts/
+README.md
