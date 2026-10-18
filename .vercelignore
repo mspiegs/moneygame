@@ -11,3 +11,4 @@ www/
 ios/
 capacitor.config.json
 vendor/*.map
+test-cards/
