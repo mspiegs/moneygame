@@ -31,6 +31,10 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Dormie uses the camera to read scorecards, so it can fill in a course or everyone’s scores for you.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Dormie reads scorecard photos you pick, so it can fill in a course or everyone’s scores for you.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

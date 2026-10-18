@@ -2,6 +2,7 @@ import { html, render, useState, useReducer, useEffect, useMemo, useRef } from '
 import * as N from './nassau.js';
 import * as A from './auth.js';
 import { API_BASE } from './config.js';
+import { scanScorecard } from './camera.js';
 import { Sync, opsFor } from './store.js';
 
 // ---------- Icons ----------
@@ -23,6 +24,7 @@ const I = {
   arrow: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h15M13 6l6 6-6 6"/></svg>`,
   info: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.01"/></svg>`,
   copy: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8"/></svg>`,
+  camera: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l1.6-2.4A1.5 1.5 0 0 1 9.8 5h4.4a1.5 1.5 0 0 1 1.2.6L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/></svg>`,
 };
 
 // ---------- Helpers ----------
@@ -738,12 +740,104 @@ function Players({ state, dispatch, user, syncStatus }) {
   </main>`;
 }
 
+// ---------- Scorecard photos ----------
+/** A button that photographs a scorecard and reads it (kind: 'course' | 'round'), with progress and errors. */
+function ScanButton({ kind, context, label, onResult, block = true }) {
+  const [state, setState] = useState('idle'); // idle | reading
+  const [error, setError] = useState(null);
+  const run = async () => {
+    setError(null);
+    try {
+      const res = await scanScorecard(kind, context, { onReading: () => setState('reading') });
+      setState('idle');
+      if (!res) return;
+      if (!res.readable) { setError(res.notes || 'That doesn\u2019t look like a readable scorecard. Try a straighter, closer photo.'); return; }
+      onResult(res);
+    } catch (e) {
+      setState('idle');
+      setError(e instanceof TypeError ? 'You need signal to read a scorecard.' : e.message);
+    }
+  };
+  return html`<div style="display:flex;flex-direction:column;gap:8px">
+    <button type="button" class=${`btn soft${block ? ' block' : ''}`} disabled=${state === 'reading'} onClick=${run}>
+      ${state === 'reading' ? html`<span class="spinner" aria-hidden="true"></span> Reading the card\u2026 (about 30 seconds)` : html`${I.camera} ${label}`}
+    </button>
+    ${error && html`<div class="form-error" role="alert">${error}</div>`}
+  </div>`;
+}
+
+/** What Claude flagged while reading the card, plus the standing reminder to check it. */
+function ScanNotes({ notes }) {
+  return html`<div class="banner">${I.info}<span style="flex:1">Filled in from your photo. Check every number against the card before saving.${notes ? html`<br /><span class="note">${notes}</span>` : ''}</span></div>`;
+}
+
+/**
+ * Review scores read from a card before they're used: match each card row to a player
+ * (or skip it) and fix any number. onApply gets [{ playerId, scores }].
+ */
+function ScanReview({ result, players, par, notes, applyLabel = 'Use these scores', onApply, onCancel }) {
+  const [rows, setRows] = useState(() => result.players.map((r) => ({ ...r, playerId: r.playerId || '', scores: [...r.scores] })));
+  const setRow = (i, patch) => setRows(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  const setScore = (i, h, v) => { const n = parseInt(v, 10); const scores = [...rows[i].scores]; scores[h] = n >= 1 && n <= 20 ? n : null; setRow(i, { scores }); };
+  const chosen = rows.filter((r) => r.playerId);
+  const dupes = chosen.length !== new Set(chosen.map((r) => r.playerId)).size;
+  const holes = Array.from({ length: 18 }, (_, i) => i);
+  const part = (arr, s) => sum(arr.slice(s, s + 9).map((v) => v || 0)) || '';
+  return html`<div class="card pad" style="display:flex;flex-direction:column;gap:14px">
+    <${ScanNotes} notes=${notes} />
+    ${!rows.length ? html`<div class="empty-state">No scores were found on the card.</div>` : html`
+      <div class="section">
+        <div class="section-head"><span class="eyebrow">Who's who</span></div>
+        ${rows.map((r, i) => html`<div class="scan-match">
+          <span class="on-card">\u201c${r.nameOnCard || '?'}\u201d</span>
+          <span class="arrow">${I.arrow}</span>
+          <select class="input" aria-label=${`Player for ${r.nameOnCard}`} value=${r.playerId} onChange=${(e) => setRow(i, { playerId: e.target.value })}>
+            <option value="">Skip this row</option>
+            ${players.map((p) => html`<option value=${p.id}>${p.name}</option>`)}
+          </select>
+        </div>`)}
+        ${dupes && html`<div class="note neg">Two card rows are matched to the same player.</div>`}
+      </div>
+      <div class="sc-wrap"><table class="sc scan-grid">
+        <tbody>
+          <tr class="hdr"><th class="stick" scope="col">Hole</th>${holes.slice(0, 9).map((h) => html`<td>${h + 1}</td>`)}<td class="tot">Out</td>${holes.slice(9).map((h) => html`<td>${h + 1}</td>`)}<td class="tot">In</td><td class="tot">Tot</td></tr>
+          ${par && html`<tr class="par"><td class="stick">Par</td>${holes.slice(0, 9).map((h) => html`<td>${par[h]}</td>`)}<td class="tot">${part(par, 0)}</td>${holes.slice(9).map((h) => html`<td>${par[h]}</td>`)}<td class="tot">${part(par, 9)}</td><td class="tot">${sum(par)}</td></tr>`}
+          ${rows.map((r, i) => html`<tr class=${r.playerId ? '' : 'skipped'}>
+            <td class="stick">${r.nameOnCard || '?'}</td>
+            ${holes.slice(0, 9).map((h) => html`<td><input inputmode="numeric" aria-label=${`${r.nameOnCard} hole ${h + 1}`} value=${r.scores[h] ?? ''} onInput=${(e) => setScore(i, h, e.target.value)} /></td>`)}
+            <td class="tot">${part(r.scores, 0)}</td>
+            ${holes.slice(9).map((h) => html`<td><input inputmode="numeric" aria-label=${`${r.nameOnCard} hole ${h + 1}`} value=${r.scores[h] ?? ''} onInput=${(e) => setScore(i, h, e.target.value)} /></td>`)}
+            <td class="tot">${part(r.scores, 9)}</td><td class="tot">${sum(r.scores.map((v) => v || 0)) || ''}</td>
+          </tr>`)}
+        </tbody>
+      </table></div>
+      <p class="note" style="margin:0">Compare the totals with the card's Out, In and Total. A mismatch usually means a misread number.</p>`}
+    <div style="display:flex;gap:10px">
+      <button type="button" class="btn ghost" onClick=${onCancel}>Cancel</button>
+      <button type="button" class="btn primary" style="flex:1" disabled=${!chosen.length || dupes}
+        onClick=${() => onApply(chosen.map((r) => ({ playerId: r.playerId, scores: r.scores })))}>${applyLabel}</button>
+    </div>
+  </div>`;
+}
+
 // ---------- Courses ----------
 function CourseForm({ initial, onSave, onCancel }) {
   const [c, setC] = useState(() => initial ? { ...initial, par: [...initial.par], si: [...initial.si], teeSets: initial.teeSets.map((t) => ({ ...t })) }
     : { id: uid('c-'), name: '', teeSets: [{ id: uid('t-'), name: 'Blue', rating: 72.0, slope: 128 }, { id: uid('t-'), name: 'White', rating: 70.0, slope: 122 }],
         par: [...SAMPLE_COURSE.par], si: [...SAMPLE_COURSE.si] });
   const set = (patch) => setC({ ...c, ...patch });
+  const [scanNotes, setScanNotes] = useState(null);
+  // Fill from a photo. Anything the card didn't show stays blank so the form flags it rather than guessing.
+  const fromScan = (r) => {
+    setC({
+      ...c,
+      name: r.courseName || c.name,
+      par: r.par.map((v) => v ?? ''),
+      si: r.si.map((v) => v ?? ''),
+      teeSets: r.tees.length ? r.tees.map((t) => ({ id: uid('t-'), name: t.name, rating: t.rating ?? '', slope: t.slope ?? '' })) : c.teeSets,
+    });
+    setScanNotes(r.notes || '');
+  };
   const setHole = (key, h, v) => { const arr = [...c[key]]; arr[h] = parseInt(v, 10) || 0; set({ [key]: arr }); };
   const siOk = [...c.si].sort((a, b) => a - b).every((v, i) => v === i + 1);
   const setTee = (id, patch) => set({ teeSets: c.teeSets.map((t) => (t.id === id ? { ...t, ...patch } : t)) });
@@ -755,6 +849,8 @@ function CourseForm({ initial, onSave, onCancel }) {
     <span class="h">SI</span>${Array.from({ length: 9 }, (_, i) => html`<input aria-label=${`Stroke index hole ${start + i + 1}`} inputmode="numeric" value=${c.si[start + i]} onInput=${(e) => setHole('si', start + i, e.target.value)} />`)}
   </div>`;
   return html`<form class="card pad" style="display:flex;flex-direction:column;gap:14px" onSubmit=${(e) => { e.preventDefault(); if (valid) onSave({ ...c, name: c.name.trim(), sample: false }); }}>
+    <${ScanButton} kind="course" label="Fill from a scorecard photo" onResult=${fromScan} />
+    ${scanNotes != null && html`<${ScanNotes} notes=${scanNotes} />`}
     <div class="form-grid">
       <div class="field span"><label for="cf-name">Course</label><input id="cf-name" class="input" value=${c.name} onInput=${(e) => set({ name: e.target.value })} placeholder="e.g. Ridgewood CC" /></div>
     </div>
@@ -815,6 +911,8 @@ function Setup({ state, dispatch, go, user }) {
   const [custom, setCustom] = useState([]);
   const [adding, setAdding] = useState(false);
   const [addingCourse, setAddingCourse] = useState(false);
+  const [scan, setScan] = useState(null); // scorecard result awaiting review
+  const [prefill, setPrefill] = useState(null); // { playerId: scores[18] } from a reviewed scorecard
 
   const baseCourse = courses.find((c) => c.id === courseId);
   const course = baseCourse && withTee(baseCourse, teeId);
@@ -843,7 +941,7 @@ function Setup({ state, dispatch, go, user }) {
   const next = () => {
     if (step < 2) { setStep(step + 1); window.scrollTo(0, 0); return; }
     const scores = {};
-    for (const id of ids) scores[id] = Array(18).fill(null);
+    for (const id of ids) scores[id] = prefill?.[id] ? [...prefill[id]] : Array(18).fill(null);
     const round = {
       id: uid('r-'), createdAt: Date.now(), course, players: selected.map((p) => ({ ...p })), scores,
       game: { ...game, teams, wheel, matches }, presses: [], hole: 0, status: 'live',
@@ -870,6 +968,19 @@ function Setup({ state, dispatch, go, user }) {
       <div class="steps" aria-hidden="true">${[0, 1, 2].map((i) => html`<span class=${i <= step ? 'on' : ''}></span>`)}</div>
       <div><h1 class="h">${titles[step][0]}</h1><p class="sub">${titles[step][1]}</p></div>
 
+      ${step === 0 && !scan && html`<${ScanButton} kind="round" label="Start from a photo of the scorecard"
+        context=${{ players: state.players.map((p) => ({ id: p.id, name: p.name })) }} onResult=${setScan} />`}
+      ${step === 0 && scan && html`<${ScanReview} result=${scan} notes=${scan.notes} players=${state.players}
+        applyLabel="Use these players and scores" onCancel=${() => setScan(null)} onApply=${(rows) => {
+          setIds(rows.slice(0, MAX_PLAYERS).map((r) => r.playerId));
+          setPrefill(Object.fromEntries(rows.map((r) => [r.playerId, r.scores])));
+          // Pick the course too when the card names one we know.
+          const name = scan.courseName?.toLowerCase().replace(/\b(golf|country|club|gc|cc|the)\b|[^a-z0-9]/g, '');
+          const match = name && courses.find((c) => { const n = c.name.toLowerCase().replace(/\b(golf|country|club|gc|cc|the)\b|[^a-z0-9]/g, ''); return n && (n.includes(name) || name.includes(n)); });
+          if (match) pickCourse(match);
+          setScan(null);
+        }} />`}
+      ${step === 0 && prefill && !scan && html`<div class="banner">${I.check}<span>Scores from your photo go in when you tee off. Pick the course and the game next, and the bets are worked out from the card.</span></div>`}
       ${step === 0 && html`
         <div class="tray" aria-label="Selected players">
           ${Array.from({ length: MAX_PLAYERS }, (_, i) => selected[i]
@@ -1107,7 +1218,7 @@ function Round({ round, dispatch, go }) {
       <span class="icon-btn"></span>
     </header>
     ${tab === 'score' && html`<${ScoreTab} round=${round} data=${data} dispatch=${dispatch} toast=${showToast} onSettle=${() => setTab('settle')} />`}
-    ${tab === 'card' && html`<${CardTab} round=${round} data=${data} />`}
+    ${tab === 'card' && html`<${CardTab} round=${round} data=${data} dispatch=${dispatch} />`}
     ${tab === 'bets' && html`<${BetsTab} round=${round} data=${data} dispatch=${dispatch} />`}
     ${tab === 'settle' && html`<${SettleTab} round=${round} data=${data} dispatch=${dispatch} go=${go} toast=${showToast} />`}
     ${toast}
@@ -1229,13 +1340,30 @@ function ScoreTab({ round, data, dispatch, toast, onSettle }) {
   </main>`;
 }
 
-function CardTab({ round, data }) {
+function CardTab({ round, data, dispatch }) {
+  const [scan, setScan] = useState(null);
+  const [filled, setFilled] = useState(null);
+  const applyScan = (rows) => {
+    let n = 0;
+    for (const { playerId, scores } of rows)
+      scores.forEach((v, hole) => {
+        if (v != null && v !== round.scores[playerId]?.[hole]) { dispatch({ type: 'setScore', roundId: round.id, pid: playerId, hole, value: v }); n++; }
+      });
+    setScan(null);
+    setFilled(n ? `Filled in ${n} ${n === 1 ? 'score' : 'scores'} from the card.` : 'The card matched what was already entered.');
+  };
   const strokes = useMemo(() => displayStrokes(round), [round.id]);
   const { par, si } = round.course;
   const nine = (s) => Array.from({ length: 9 }, (_, i) => s + i);
   const cells = (fn, tot) => html`${nine(0).map(fn)}<td class="tot">${tot(0)}</td>${nine(9).map(fn)}<td class="tot">${tot(9)}</td>`;
   const total = (arr, s) => { const part = arr.slice(s, s + 9); return part.some((v) => v == null) && !part.some((v) => v != null) ? '' : sum(part); };
   return html`<main class="page with-tabs fade-in">
+    ${round.status !== 'final' && !scan && html`<${ScanButton} kind="round" label="Fill scores from a photo of the card"
+      context=${{ players: round.players.map((p) => ({ id: p.id, name: p.name })), course: { name: round.course.name } }}
+      onResult=${(r) => { setFilled(null); setScan(r); }} />`}
+    ${scan && html`<${ScanReview} result=${scan} notes=${scan.notes} players=${round.players} par=${round.course.par}
+      applyLabel="Fill in these scores" onCancel=${() => setScan(null)} onApply=${applyScan} />`}
+    ${filled && html`<div class="banner">${I.check}<span>${filled} The bets and settle-up are updated.</span></div>`}
     <div class="sc-wrap"><table class="sc">
       <tbody>
         <tr class="hdr"><th class="stick" scope="col">Hole</th>${nine(0).map((i) => html`<td>${i + 1}</td>`)}<td class="tot">Out</td>${nine(9).map((i) => html`<td>${i + 1}</td>`)}<td class="tot">In</td><td class="tot">Tot</td><td class="tot">Net</td></tr>

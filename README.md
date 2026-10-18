@@ -14,6 +14,7 @@ A phone-first app for golf money games, starting with the Nassau.
 - `config.js` — where the API lives (`''` = same origin). The iPhone build swaps in the server's URL.
 - `index.html` — page shell and styles.
 - `store.js` — keeps local state in sync with the server: changes queue in an offline outbox and go to `/api/sync`; fresh state comes from `/api/state`.
+- `camera.js` — takes or picks a scorecard photo, shrinks it, and sends it to `/api/scan`.
 - `auth.js` — sign-in and authenticated API calls from the browser.
 - `api/` — serverless API (Vercel functions, Web-standard `GET`/`POST` handlers). Files under `api/_lib/` are shared helpers, not endpoints.
 - `db/migrations/` — Postgres schema (Neon), applied in order by `npm run migrate`.
@@ -59,4 +60,8 @@ That builds `www/` for production, syncs it into the Xcode project, and opens Xc
 Sign-in in the app doesn't use cookies: it sends `x-dormie-client: native`, keeps the Neon Auth session itself (in Capacitor Preferences), and `api/auth-proxy.js` turns that into the cookie Neon Auth expects. API calls use the same short-lived JWT as the website. `CapacitorHttp` sends requests natively, so the API needs no CORS setup.
 
 To ship a build: in Xcode, select the `App` target, set your team under Signing & Capabilities, then Product → Archive → Distribute App → TestFlight & App Store. The bundle ID is `com.mattspiegel.dormie`.
+
+## Scorecard photos
+
+`api/scan.js` reads a scorecard photo with Claude (`claude-opus-5-5`, vision + structured JSON output) and returns either a course (name, par, handicaps, tees with rating/slope) or a round's handwritten scores matched to the group's players. Nothing is saved by the endpoint: the app shows the result for the golfer to check and fix first. It needs `ANTHROPIC_API_KEY` (in `.env` locally and in Vercel for production); without it the endpoint answers 503 and the app says scanning isn't set up. A scan costs a few cents. Server-side refusal fallbacks are enabled, so a rare safety decline retries on another model instead of failing.
 
