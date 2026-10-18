@@ -4,12 +4,13 @@
 //
 // Usage: npm run app:build            (production API)
 //        DORMIE_API=http://localhost:8017 npm run app:build   (local dev server, for the simulator)
-import { cp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 
 const root = new URL('..', import.meta.url).pathname;
 const out = `${root}www/`;
 const api = (process.env.DORMIE_API || 'https://dormie-gold.vercel.app').replace(/\/$/, '');
-const files = ['index.html', 'app.js', 'auth.js', 'store.js', 'nassau.js', 'vendor'];
+// The page, every browser script at the top level (server code lives in api/ and scripts/), and vendored libraries.
+const files = ['index.html', 'vendor', ...(await readdir(root)).filter((f) => f.endsWith('.js') && f !== 'config.js')];
 
 await rm(out, { recursive: true, force: true });
 await mkdir(out);
