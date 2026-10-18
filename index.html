@@ -102,6 +102,9 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; height: 
 .card.rows > .invite-panel:last-child { border-radius: 0 0 var(--r) var(--r); }
 .invite-panel .input { background: var(--surface); font-size: 14px; }
 .scan-match { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1.4fr); align-items: center; gap: 10px; }
+.scan-row { display: flex; flex-direction: column; gap: 10px; }
+.scan-row + .scan-row { padding-top: 10px; border-top: 1px solid var(--line); }
+.scan-new { padding-left: 4px; }
 .scan-match .on-card { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .scan-match .arrow { color: var(--ink-3); width: 18px; height: 18px; display: grid; }
 .scan-match select.input { height: 42px; }
