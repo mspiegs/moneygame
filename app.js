@@ -75,6 +75,37 @@ const TEE_COLORS = { black: '#1B1F1D', blue: '#2459A6', white: '#F4F4F0', gold: 
 const teeColor = (name) => TEE_COLORS[name.trim().toLowerCase()] || 'var(--ink-3)';
 const teeSummary = (c) => (c.teeSets || []).map((t) => t.name).join(' · ');
 
+// Real courses that ship with the app, offered to every group. Players can still edit them in Courses.
+// The Farms GC (Rancho Santa Fe, CA): pars and men's handicaps from GolfPass; tee ratings/slopes from GolfLink
+// (2025 layout). Confirm handicap holes against the current club scorecard.
+const BUILT_IN_COURSES = [
+  {
+    id: 'c-the-farms',
+    name: 'The Farms Golf Club',
+    par: [4, 3, 5, 4, 3, 4, 4, 4, 5, 4, 4, 5, 4, 3, 4, 3, 4, 5],
+    si: [16, 14, 2, 12, 8, 6, 4, 10, 18, 3, 13, 7, 9, 15, 5, 11, 1, 17],
+    teeSets: [
+      { id: 't-farms-black', name: 'Black', rating: 74.2, slope: 141 },
+      { id: 't-farms-gold', name: 'Gold', rating: 72.5, slope: 137 },
+      { id: 't-farms-blue', name: 'Blue', rating: 71.5, slope: 134 },
+      { id: 't-farms-white', name: 'White', rating: 70.0, slope: 128 },
+    ],
+    lastTee: 't-farms-blue',
+    builtIn: true,
+  },
+];
+
+/** The group's courses plus any built-in course the group hasn't saved yet. A built-in is saved to the group when it's first used or edited. */
+// Course and tee ids are unique across all groups in the database, so a group gets its own copy with fresh ids;
+// after that the group's copy (matched by name) replaces the built-in in lists.
+const allCourses = (state) => [...state.courses, ...BUILT_IN_COURSES.filter((b) => !state.courses.some((c) => c.id === b.id || c.name === b.name))];
+const isUnsavedBuiltIn = (state, c) => !!c?.builtIn && !state.courses.some((x) => x.id === c.id);
+function adoptBuiltIn(c) {
+  const teeIds = Object.fromEntries(c.teeSets.map((t) => [t.id, uid('t-')]));
+  const { builtIn, ...rest } = c;
+  return { ...rest, id: uid('c-'), teeSets: c.teeSets.map((t) => ({ ...t, id: teeIds[t.id] })), lastTee: teeIds[c.lastTee] ?? null };
+}
+
 const SAMPLE_PLAYERS = [
   ['p-jack', 'Jack Reilly', 4.2],
   ['p-danny', 'Danny Ortiz', 11.8],
@@ -757,10 +788,10 @@ function Courses({ state, dispatch }) {
     ${editing === 'new' ? html`<${CourseForm} onCancel=${() => setEditing(null)} onSave=${(c) => { dispatch({ type: 'saveCourse', course: c }); setEditing(null); }} />`
       : html`<button type="button" class="btn soft block" onClick=${() => setEditing('new')}>${I.plus} Add course</button>`}
     <div class="card rows">
-      ${state.courses.map((c) => editing === c.id
-        ? html`<div style="padding:4px"><${CourseForm} initial=${c} onCancel=${() => setEditing(null)} onSave=${(v) => { dispatch({ type: 'saveCourse', course: v }); setEditing(null); }} /></div>`
+      ${allCourses(state).map((c) => editing === c.id
+        ? html`<div style="padding:4px"><${CourseForm} initial=${c} onCancel=${() => setEditing(null)} onSave=${(v) => { dispatch({ type: 'saveCourse', course: isUnsavedBuiltIn(state, c) ? adoptBuiltIn(v) : v }); setEditing(null); }} /></div>`
         : html`<div class="row">
-          <div class="grow"><div class="name">${c.name}</div><div class="meta">Par ${sum(c.par)} · ${teeSummary(c)}${c.sample ? ' · sample' : ''}</div></div>
+          <div class="grow"><div class="name">${c.name}</div><div class="meta">Par ${sum(c.par)} · ${teeSummary(c)}${c.sample ? ' · sample' : ''}${isUnsavedBuiltIn(state, c) ? ' · built in' : ''}</div></div>
           <button type="button" class="link" onClick=${() => setEditing(c.id)}>Edit</button>
         </div>`)}
     </div>
@@ -774,8 +805,9 @@ function Setup({ state, dispatch, go, user }) {
   const [step, setStep] = useState(0);
   // You're almost always playing: start with yourself picked.
   const [ids, setIds] = useState(() => state.players.filter((p) => p.userId === user.id).map((p) => p.id));
-  const [courseId, setCourseId] = useState(state.courses[0]?.id);
-  const [teeId, setTeeId] = useState(state.courses[0]?.lastTee);
+  const courses = allCourses(state);
+  const [courseId, setCourseId] = useState(courses[0]?.id);
+  const [teeId, setTeeId] = useState(courses[0]?.lastTee);
   const [wheel, setWheel] = useState([]);
   const [game, setGame] = useState(N.defaultGame);
   const [teams, setTeams] = useState({});
@@ -784,7 +816,7 @@ function Setup({ state, dispatch, go, user }) {
   const [adding, setAdding] = useState(false);
   const [addingCourse, setAddingCourse] = useState(false);
 
-  const baseCourse = state.courses.find((c) => c.id === courseId);
+  const baseCourse = courses.find((c) => c.id === courseId);
   const course = baseCourse && withTee(baseCourse, teeId);
   const pickCourse = (c) => { setCourseId(c.id); setTeeId(c.lastTee); };
   const selected = ids.map((id) => state.players.find((p) => p.id === id)).filter(Boolean);
@@ -816,6 +848,11 @@ function Setup({ state, dispatch, go, user }) {
       id: uid('r-'), createdAt: Date.now(), course, players: selected.map((p) => ({ ...p })), scores,
       game: { ...game, teams, wheel, matches }, presses: [], hole: 0, status: 'live',
     };
+    if (isUnsavedBuiltIn(state, baseCourse)) {
+      const saved = adoptBuiltIn({ ...baseCourse, lastTee: course.teeId });
+      dispatch({ type: 'saveCourse', course: saved });
+      round.course = withTee(saved, saved.lastTee);
+    }
     dispatch({ type: 'createRound', round });
     go({ view: 'round', id: round.id });
   };
@@ -859,7 +896,7 @@ function Setup({ state, dispatch, go, user }) {
 
       ${step === 1 && html`
         <div class="card rows">
-          ${state.courses.map((c) => html`<button type="button" class="pick" aria-pressed=${c.id === courseId} onClick=${() => pickCourse(c)}>
+          ${courses.map((c) => html`<button type="button" class="pick" aria-pressed=${c.id === courseId} onClick=${() => pickCourse(c)}>
             <div style="flex:1;min-width:0"><div style="font-weight:700">${c.name}</div><div class="note">Par ${sum(c.par)} · ${c.teeSets.length} ${c.teeSets.length === 1 ? 'tee' : 'tees'}</div></div>
             <span class="check">${I.check}</span>
           </button>`)}
