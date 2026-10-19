@@ -5,6 +5,7 @@ import * as NP from './ninepoint.js';
 import * as A from './auth.js';
 import { API_BASE } from './config.js';
 import { scanScorecard } from './camera.js';
+import { applyTheme, getTheme, setTheme } from './theme.js';
 import { Sync, opsFor } from './store.js';
 
 // ---------- Icons ----------
@@ -408,6 +409,7 @@ function SignIn({ offline, invite, onDone }) {
 
 function Account({ user, onSignOut, go, syncStatus, onGroup }) {
   const [busy, setBusy] = useState(false);
+  const [theme, setThemeState] = useState(getTheme);
   const [groups, setGroups] = useState(null);
   useEffect(() => { A.api('me').then((d) => setGroups(d.groups), () => setGroups([])); }, []);
   return html`<main class="page fade-in">
@@ -419,6 +421,12 @@ function Account({ user, onSignOut, go, syncStatus, onGroup }) {
     <div class="card rows">
       <div class="row"><${Avatar} p=${{ name: user.name || user.email, color: 'var(--accent)' }} />
         <div class="grow"><div class="name">${user.name || 'No name'}</div><div class="meta">${user.email}</div></div></div>
+    </div>
+    <div class="section">
+      <div class="section-head"><h2>Appearance</h2><span class="meta">this device</span></div>
+      <${Seg} value=${theme} onChange=${(t) => { setTheme(t); setThemeState(t); }} options=${[
+        { value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }, { value: 'system', label: 'Match phone' },
+      ]} />
     </div>
     ${groups?.length > 1 && html`<div class="section">
       <div class="section-head"><h2>Groups</h2><span class="meta">tap to switch</span></div>
@@ -1751,4 +1759,5 @@ function SettleTab({ round, data, dispatch, go, toast }) {
   </main>`;
 }
 
+applyTheme();
 render(html`<${App} />`, document.getElementById('root'));

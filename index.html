@@ -2,6 +2,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="claude:viewport-fit-sides" content="cover">
 <meta name="theme-color" content="#0E4A30">
+<script>
+  // Appearance chosen in Account (theme.js); applied before anything draws. Default: light.
+  try { var t = localStorage.getItem('dormie.theme') || 'light'; if (t !== 'system') document.documentElement.dataset.theme = t; }
+  catch (e) { document.documentElement.dataset.theme = 'light'; }
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap">
@@ -9,6 +14,7 @@
 /* Layout: one phone-width column; a dark green hand-set scoreboard is the signature surface,
    everything else is quiet paper-white cards on a faint fairway-grey ground. */
 :root {
+  color-scheme: light;
   --bg: #ECEFEB;
   --surface: #FFFFFF;
   --surface-2: #F4F6F3;
