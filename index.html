@@ -111,16 +111,17 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; height: 
 table.scan-grid input { width: 30px; height: 30px; border: 0; border-radius: 6px; background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--line); text-align: center; font: inherit; font-weight: 700; color: var(--ink); padding: 0; }
 table.scan-grid input:focus { outline: none; box-shadow: inset 0 0 0 2px var(--accent); }
 table.scan-grid tr.skipped td { opacity: .45; }
-.game-card { background: var(--surface); border-radius: var(--r); box-shadow: var(--shadow); overflow: hidden; }
-.game-card.open { box-shadow: inset 0 0 0 2px var(--accent), var(--shadow); }
+.game-card { background: var(--surface); border-radius: var(--r); box-shadow: var(--shadow); overflow: hidden; border: 1.5px solid transparent; }
+/* A real border (not an inset shadow), so the open game is framed all the way around its settings. */
+.game-card.open { border-color: var(--accent); }
 .game-head { width: 100%; display: flex; align-items: center; gap: 12px; padding: 14px 16px; text-align: left; }
 .game-head .grow { flex: 1; min-width: 0; }
 .game-head .t { font-weight: 800; font-size: 16px; }
 .game-head .d { font-size: 12.5px; color: var(--ink-3); margin-top: 2px; }
 .game-head .d.neg { color: var(--loss); font-weight: 650; }
-.game-head .chev { color: var(--ink-3); width: 20px; height: 20px; display: grid; flex: none; transition: transform .2s; }
+.game-head .chev { color: var(--ink-3); width: 20px; height: 20px; display: grid; flex: none; margin-left: auto; transition: transform .2s; }
 .game-card.open .chev { transform: rotate(90deg); }
-.game-body { display: flex; flex-direction: column; gap: 20px; padding: 4px 12px 14px; background: var(--bg); border-top: 1px solid var(--line); padding-top: 14px; }
+.game-body { display: flex; flex-direction: column; gap: 20px; padding: 14px 12px; background: var(--surface-2); border-top: 1px solid var(--line); }
 .game-foot { display: flex; justify-content: space-between; gap: 10px; }
 .add-games { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .add-game { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 14px; border-radius: var(--r); background: var(--surface);
