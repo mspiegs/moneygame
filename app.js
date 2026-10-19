@@ -936,6 +936,7 @@ function Setup({ state, dispatch, go, user }) {
   const [addingCourse, setAddingCourse] = useState(false);
   const [scan, setScan] = useState(null); // scorecard result awaiting review
   const [nassauOn, setNassauOn] = useState(true);
+  const [openGame, setOpenGame] = useState('nassau'); // which game's settings are showing
   const [sideGames, setSideGames] = useState([]); // 9 Point games, each with its own 3 players
   // Once a reviewed scorecard is applied, the round's players are exactly the card's, in card order:
   // { rows: [{ nameOnCard, playerId, scores }], notes, courseName }
@@ -1092,22 +1093,36 @@ function Setup({ state, dispatch, go, user }) {
 
       ${step === 2 && draftRound && html`
         <div class="section">
-          <div class="section-head"><h2>Games</h2><span class="meta">play one or several</span></div>
-          <div class="card rows">
-            <${Opt} title="Nassau" desc="Front 9, back 9 and the 18, with presses">
-              <${Switch} label="Nassau" on=${nassauOn} onChange=${setNassauOn} />
-            </${Opt}>
+          <div class="section-head"><h2>Games in this round</h2><span class="meta">${(nassauOn ? 1 : 0) + sideGames.length || 'none yet'}</span></div>
+          ${nassauOn && html`<${GameCard} title="Nassau" summary=${nassauSummary(game, matches)} problem=${!matches.length && 'Set up the sides'}
+            open=${openGame === 'nassau'} onToggle=${() => setOpenGame(openGame === 'nassau' ? null : 'nassau')}
+            onRemove=${() => { setNassauOn(false); setOpenGame(null); }}>
+            <${GameSetup} round=${draftRound} game=${game} setGame=${setGame} ids=${ids} players=${selected}
+              teams=${teams} setTeams=${setTeams} wheel=${wheel} setWheel=${setWheel} scoring=${scoring} setScoring=${setScoring} custom=${custom} setCustom=${setCustom} matches=${matches} />
+          </${GameCard}>`}
+          ${sideGames.map((g, i) => html`<${GameCard} title=${sideGames.length > 1 ? `9 Point ${i + 1}` : '9 Point'}
+            summary=${`${g.players.map((id) => first(selected.find((p) => p.id === id)?.name ?? '?')).join(', ')} · ${NP.ninePointSummary(g)}`}
+            problem=${g.players.length !== 3 && `Pick 3 players (${g.players.length} picked)`}
+            open=${openGame === g.id} onToggle=${() => setOpenGame(openGame === g.id ? null : g.id)}
+            onRemove=${() => { setSideGames(sideGames.filter((x) => x.id !== g.id)); setOpenGame(null); }}>
+            <${NinePointSetup} round=${draftRound} g=${g} players=${selected} onChange=${(v) => setSideGames(sideGames.map((x) => (x.id === g.id ? v : x)))} />
+          </${GameCard}>`)}
+          ${!nassauOn && !sideGames.length && html`<div class="card empty-state">No games yet. Add one below.</div>`}
+        </div>
+        <div class="section">
+          <div class="section-head"><h2>Add a game</h2></div>
+          <div class="add-games">
+            <button type="button" class="add-game" disabled=${nassauOn} onClick=${() => { setNassauOn(true); setOpenGame('nassau'); }}>
+              <span class="plus">${nassauOn ? I.check : I.plus}</span><b>Nassau</b>
+              <small>${nassauOn ? 'Added' : 'Front 9, back 9 and the 18, with presses'}</small>
+            </button>
+            <button type="button" class="add-game" disabled=${ids.length < 3} onClick=${() => { const g = NP.defaultNinePoint(ids.length === 3 ? ids : []); setSideGames([...sideGames, g]); setOpenGame(g.id); }}>
+              <span class="plus">${I.plus}</span><b>9 Point</b>
+              <small>${ids.length < 3 ? 'Needs 3 players' : '5-3-1 points a hole, 3 players'}</small>
+            </button>
           </div>
-          ${sideGames.map((g) => html`<${NinePointSetup} round=${draftRound} g=${g} players=${selected}
-            onChange=${(v) => setSideGames(sideGames.map((x) => (x.id === g.id ? v : x)))} onRemove=${() => setSideGames(sideGames.filter((x) => x.id !== g.id))} />`)}
-          <button type="button" class="btn ghost block" disabled=${ids.length < 3} onClick=${() => setSideGames([...sideGames, NP.defaultNinePoint(ids.length === 3 ? ids : [])])}>${I.plus} Add 9 Point</button>
-          ${ids.length < 3 && html`<p class="note" style="margin:0">9 Point needs 3 players.</p>`}
-          ${!nassauOn && !sideGames.length && html`<p class="note neg" style="margin:0">Pick at least one game.</p>`}
         </div>
       `}
-      ${step === 2 && draftRound && nassauOn && html`<div class="section-head" style="margin-top:4px"><h2>Nassau</h2></div>`}
-      ${step === 2 && draftRound && nassauOn && html`<${GameSetup} round=${draftRound} game=${game} setGame=${setGame} ids=${ids} players=${selected}
-        teams=${teams} setTeams=${setTeams} wheel=${wheel} setWheel=${setWheel} scoring=${scoring} setScoring=${setScoring} custom=${custom} setCustom=${setCustom} matches=${matches} />`}
     </main>
     <div class="dock"><div class="dock-inner">
       <span class="hint">${step === 0 ? `${ids.length} of ${MAX_PLAYERS} selected` : step === 1 ? course?.name ?? 'Pick a course' : [nassauOn && `${matches.length} Nassau ${matches.length === 1 ? 'match' : 'matches'}`, sideGames.length && `${sideGames.length} × 9 Point`].filter(Boolean).join(' + ') || 'No games'}</span>
@@ -1138,6 +1153,37 @@ function CustomMatchBuilder({ players, onAdd }) {
   </div>`;
 }
 
+/** One game in round setup: a header with its summary that opens to its settings. */
+function GameCard({ title, summary, problem, open, onToggle, onRemove, children }) {
+  return html`<div class=${`game-card${open ? ' open' : ''}`}>
+    <button type="button" class="game-head" aria-expanded=${open} onClick=${onToggle}>
+      <div class="grow"><div class="t">${title}</div><div class=${`d${problem ? ' neg' : ''}`}>${problem || summary}</div></div>
+      <span class="chev" aria-hidden="true">${I.next}</span>
+    </button>
+    ${open && html`<div class="game-body">
+      ${children}
+      <div class="game-foot">
+        <button type="button" class="btn danger sm" onClick=${onRemove}>Remove ${title}</button>
+        <button type="button" class="btn primary sm" onClick=${onToggle}>Done</button>
+      </div>
+    </div>`}
+  </div>`;
+}
+
+const FORMAT_LABELS = { teams: 'Teams', wheel: 'Wheel', roundrobin: 'Everyone vs everyone', custom: 'Custom matches' };
+/** One-line Nassau summary, e.g. "$10 · Teams · 1 match · net, low man · 2-down autos". */
+function nassauSummary(game, matches) {
+  const st = game.stakes;
+  const same = st.front === st.back && st.back === st.overall;
+  return [
+    `$${same ? st.front : `${st.front}-${st.back}-${st.overall}`}`,
+    FORMAT_LABELS[game.format],
+    `${matches.length} ${matches.length === 1 ? 'match' : 'matches'}`,
+    game.handicap.mode === 'gross' ? 'gross' : `net${game.handicap.allowance !== 100 ? ` ${game.handicap.allowance}%` : ''}`,
+    game.autoPress.enabled ? `${game.autoPress.down}-down autos` : 'no autos',
+  ].join(' · ');
+}
+
 /** Setup for one 9 Point game: its three players, stake, scoring and options. */
 function NinePointSetup({ round, g, players, onChange, onRemove }) {
   const upd = (patch) => onChange({ ...g, ...patch });
@@ -1145,9 +1191,7 @@ function NinePointSetup({ round, g, players, onChange, onRemove }) {
   const ready = g.players.length === 3;
   const strokes = useMemo(() => (ready && round ? NP.ninePointStrokes(round, g) : {}), [round, g]);
   return html`<div class="card np-setup">
-    <div class="opt"><div class="grow"><div class="t">9 Point</div><div class="d">${NP.ninePointSummary(g)}</div></div>
-      <button type="button" class="link" onClick=${onRemove}>Remove</button></div>
-    <div class="opt-sub">
+    <div class="opt-sub" style="padding-top:14px">
       <div class="eyebrow" style="margin-bottom:8px">Players ${ready ? '' : html`<span class="neg">· pick 3</span>`}</div>
       <div class="chips">${players.map((p) => html`<button type="button" class="chip" aria-pressed=${g.players.includes(p.id)}
         disabled=${!g.players.includes(p.id) && g.players.length >= 3} onClick=${() => toggle(p.id)}>${first(p.name)}${ready && g.players.includes(p.id) && g.handicap.mode === 'net' ? ` · ${strokes[p.id] ?? 0}` : ''}</button>`)}</div>
