@@ -9,6 +9,8 @@ A phone-first app for golf money games, starting with the Nassau.
 
 ## Files
 
+- `ninepoint.js` — the 9 Point engine (5-3-1 per hole, win-by-2 sweeps, birdie doubles, carryovers, two settle-up methods).
+- `games.js` — adds up every game in a round (the Nassau in `round.game`, side games like 9 Point in `round.sideGames`); used by the app, the server ledger and the Money tab.
 - `nassau.js` — the betting engine. Pure functions, no DOM or storage, so it can move into a native app unchanged.
 - `app.js` — the UI (Preact + htm, vendored in `vendor/`; no build step).
 - `config.js` — where the API lives (`''` = same origin). The iPhone build swaps in the server's URL.

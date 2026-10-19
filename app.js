@@ -1,5 +1,7 @@
 import { html, render, useState, useReducer, useEffect, useMemo, useRef } from './vendor/htm-preact-3.1.1.module.js';
 import * as N from './nassau.js';
+import * as G from './games.js';
+import * as NP from './ninepoint.js';
 import * as A from './auth.js';
 import { API_BASE } from './config.js';
 import { scanScorecard } from './camera.js';
@@ -434,7 +436,7 @@ function Account({ user, onSignOut, go, syncStatus, onGroup }) {
 
 // ---------- Home ----------
 function Scoreboard({ round, onOpen }) {
-  const st = useMemo(() => N.settleRound(round), [round]);
+  const st = useMemo(() => G.settleAll(round), [round]);
   const thru = Math.min(...round.players.map((p) => { let t = 0; while (t < 18 && round.scores[p.id][t] != null) t++; return t; }));
   const ranked = [...round.players].sort((a, b) => st.projected[b.id] - st.projected[a.id]);
   const g = round.game;
@@ -450,7 +452,7 @@ function Scoreboard({ round, onOpen }) {
       </div>`)}
     </div>
     <div class="board-foot">
-      <span><b>${round.course.name}</b> · ${N.SEGMENT_KEYS.map((k) => g.stakes[k]).join('-')} Nassau</span>
+      <span><b>${round.course.name}</b> · ${G.gamesLabel(round)}</span>
       <span>Open ›</span>
     </div>
   </button>`;
@@ -470,7 +472,7 @@ function Home({ state, dispatch, go, user, syncStatus, joined }) {
     </div>
 
     ${live.map((r) => html`<div class="section">
-      <div class="section-head"><h2>${r.sample ? 'Sample round' : 'In progress'}</h2><span class="meta">${r.players.length} players · ${r.game.matches.length} ${r.game.matches.length === 1 ? 'match' : 'matches'}</span></div>
+      <div class="section-head"><h2>${r.sample ? 'Sample round' : 'In progress'}</h2><span class="meta">${r.players.length} players · ${G.gamesLabel(r)}</span></div>
       <${Scoreboard} round=${r} onOpen=${() => go({ view: 'round', id: r.id })} />
     </div>`)}
 
@@ -480,7 +482,7 @@ function Home({ state, dispatch, go, user, syncStatus, joined }) {
       <div class="section-head"><h2>Past rounds</h2></div>
       ${past.length ? html`<div class="card rows">
         ${past.map((r) => {
-          const st = N.settleRound(r);
+          const st = G.settleAll(r);
           const top = [...r.players].sort((a, b) => st.settled[b.id] - st.settled[a.id])[0];
           return html`<button type="button" class="row" onClick=${() => go({ view: 'round', id: r.id })}>
             <div class="av-stack">${r.players.map((p) => html`<${Avatar} p=${p} size="sm" />`)}</div>
@@ -527,7 +529,7 @@ function moneyBook(state, meId) {
   for (const r of state.rounds) {
     if (r.sample || !r.players.some((p) => p.id === meId)) continue;
     const final = r.status === 'final';
-    const rows = final ? (frozen.get(r.id) ?? N.pairwiseRound(r)) : N.pairwiseRound(r, { projected: true });
+    const rows = final ? (frozen.get(r.id) ?? G.pairwiseAll(r)) : G.pairwiseAll(r, { projected: true });
     for (const opp of r.players) {
       if (opp.id === meId) continue;
       const e = rows.find((x) => (x.winner === meId && x.loser === opp.id) || (x.loser === meId && x.winner === opp.id));
@@ -933,6 +935,8 @@ function Setup({ state, dispatch, go, user }) {
   const [adding, setAdding] = useState(false);
   const [addingCourse, setAddingCourse] = useState(false);
   const [scan, setScan] = useState(null); // scorecard result awaiting review
+  const [nassauOn, setNassauOn] = useState(true);
+  const [sideGames, setSideGames] = useState([]); // 9 Point games, each with its own 3 players
   // Once a reviewed scorecard is applied, the round's players are exactly the card's, in card order:
   // { rows: [{ nameOnCard, playerId, scores }], notes, courseName }
   const [card, setCard] = useState(null);
@@ -955,19 +959,22 @@ function Setup({ state, dispatch, go, user }) {
     setGame((g) => ({ ...g, format: ids.length === 4 || ids.length === 2 ? 'teams' : ids.length === 5 ? 'wheel' : 'roundrobin' }));
     setWheel(ids.slice(0, 2));
     setCustom([]);
+    setSideGames((gs) => gs.map((g) => ({ ...g, players: g.players.filter((id) => ids.includes(id)) })));
   }, [ids.join()]);
 
   const matches = useMemo(() => N.buildMatches(game.format, ids, teams, scoring, custom, wheel), [game.format, ids, teams, scoring, custom, wheel]);
-  const draftRound = course && { course, players: selected, game: { ...game, matches } };
+  const draftRound = course && { course, players: selected, scores: {}, game: { ...game, matches }, sideGames };
+  const sideOk = sideGames.every((g) => g.players.length === 3 && g.players.every((id) => ids.includes(id)));
+  const gamesOk = (nassauOn ? matches.length > 0 : sideGames.length > 0) && sideOk;
 
-  const canNext = [ids.length >= 2, !!course, matches.length > 0][step];
+  const canNext = [ids.length >= 2, !!course, gamesOk][step];
   const next = () => {
     if (step < 2) { setStep(step + 1); window.scrollTo(0, 0); return; }
     const scores = {};
     for (const id of ids) scores[id] = [...(card?.rows.find((r) => r.playerId === id)?.scores ?? Array(18).fill(null))];
     const round = {
       id: uid('r-'), createdAt: Date.now(), course, players: selected.map((p) => ({ ...p })), scores,
-      game: { ...game, teams, wheel, matches }, presses: [], hole: 0, status: 'live',
+      game: { ...game, teams, wheel, matches: nassauOn ? matches : [] }, sideGames, presses: [], hole: 0, status: 'live',
     };
     if (isUnsavedBuiltIn(state, baseCourse)) {
       const saved = adoptBuiltIn({ ...baseCourse, lastTee: course.teeId });
@@ -979,7 +986,7 @@ function Setup({ state, dispatch, go, user }) {
   };
   const back = () => (step === 0 ? go({ view: 'home' }) : setStep(step - 1));
 
-  const titles = [["Who's playing?", scan ? 'Match each row on the card to a player, or add them.' : card ? 'The players on your scorecard.' : `Pick 2 to ${MAX_PLAYERS} players. Tap in tee order.`], ['Where to?', 'Pick the course, then the tees you are playing.'], ['Set the game', 'A Nassau: front nine, back nine and the 18.']];
+  const titles = [["Who's playing?", scan ? 'Match each row on the card to a player, or add them.' : card ? 'The players on your scorecard.' : `Pick 2 to ${MAX_PLAYERS} players. Tap in tee order.`], ['Where to?', 'Pick the course, then the tees you are playing.'], ['Set the games', 'A Nassau, 9 Point, or both. Each game keeps its own score and money.']];
 
   return html`<div class="app">
     <header class="topbar">
@@ -1083,11 +1090,27 @@ function Setup({ state, dispatch, go, user }) {
         </div>`}
       `}
 
-      ${step === 2 && draftRound && html`<${GameSetup} round=${draftRound} game=${game} setGame=${setGame} ids=${ids} players=${selected}
+      ${step === 2 && draftRound && html`
+        <div class="section">
+          <div class="section-head"><h2>Games</h2><span class="meta">play one or several</span></div>
+          <div class="card rows">
+            <${Opt} title="Nassau" desc="Front 9, back 9 and the 18, with presses">
+              <${Switch} label="Nassau" on=${nassauOn} onChange=${setNassauOn} />
+            </${Opt}>
+          </div>
+          ${sideGames.map((g) => html`<${NinePointSetup} round=${draftRound} g=${g} players=${selected}
+            onChange=${(v) => setSideGames(sideGames.map((x) => (x.id === g.id ? v : x)))} onRemove=${() => setSideGames(sideGames.filter((x) => x.id !== g.id))} />`)}
+          <button type="button" class="btn ghost block" disabled=${ids.length < 3} onClick=${() => setSideGames([...sideGames, NP.defaultNinePoint(ids.length === 3 ? ids : [])])}>${I.plus} Add 9 Point</button>
+          ${ids.length < 3 && html`<p class="note" style="margin:0">9 Point needs 3 players.</p>`}
+          ${!nassauOn && !sideGames.length && html`<p class="note neg" style="margin:0">Pick at least one game.</p>`}
+        </div>
+      `}
+      ${step === 2 && draftRound && nassauOn && html`<div class="section-head" style="margin-top:4px"><h2>Nassau</h2></div>`}
+      ${step === 2 && draftRound && nassauOn && html`<${GameSetup} round=${draftRound} game=${game} setGame=${setGame} ids=${ids} players=${selected}
         teams=${teams} setTeams=${setTeams} wheel=${wheel} setWheel=${setWheel} scoring=${scoring} setScoring=${setScoring} custom=${custom} setCustom=${setCustom} matches=${matches} />`}
     </main>
     <div class="dock"><div class="dock-inner">
-      <span class="hint">${step === 0 ? `${ids.length} of ${MAX_PLAYERS} selected` : step === 1 ? course?.name ?? 'Pick a course' : `${matches.length} ${matches.length === 1 ? 'match' : 'matches'}`}</span>
+      <span class="hint">${step === 0 ? `${ids.length} of ${MAX_PLAYERS} selected` : step === 1 ? course?.name ?? 'Pick a course' : [nassauOn && `${matches.length} Nassau ${matches.length === 1 ? 'match' : 'matches'}`, sideGames.length && `${sideGames.length} × 9 Point`].filter(Boolean).join(' + ') || 'No games'}</span>
       <button type="button" class="btn primary" disabled=${!canNext} onClick=${next}>${step === 2 ? html`${I.flag} Tee off` : html`Next ${I.arrow}`}</button>
     </div></div>
   </div>`;
@@ -1112,6 +1135,55 @@ function CustomMatchBuilder({ players, onAdd }) {
     ${(a.length > 1 || b.length > 1) && html`<div class="opt-sub" style="padding-top:12px"><${Seg} value=${sc} onChange=${setSc} options=${[{ value: 'bestball', label: 'Best ball' }, { value: 'aggregate', label: 'Aggregate' }]} /></div>`}
     <div class="opt-sub" style="padding-top:12px"><button type="button" class="btn soft block" disabled=${!a.length || !b.length}
       onClick=${() => { onAdd({ id: uid('m-'), a, b, scoring: sc }); setSides({}); }}>${I.plus} Add match</button></div>
+  </div>`;
+}
+
+/** Setup for one 9 Point game: its three players, stake, scoring and options. */
+function NinePointSetup({ round, g, players, onChange, onRemove }) {
+  const upd = (patch) => onChange({ ...g, ...patch });
+  const toggle = (id) => upd({ players: g.players.includes(id) ? g.players.filter((x) => x !== id) : g.players.length < 3 ? [...g.players, id] : g.players });
+  const ready = g.players.length === 3;
+  const strokes = useMemo(() => (ready && round ? NP.ninePointStrokes(round, g) : {}), [round, g]);
+  return html`<div class="card np-setup">
+    <div class="opt"><div class="grow"><div class="t">9 Point</div><div class="d">${NP.ninePointSummary(g)}</div></div>
+      <button type="button" class="link" onClick=${onRemove}>Remove</button></div>
+    <div class="opt-sub">
+      <div class="eyebrow" style="margin-bottom:8px">Players ${ready ? '' : html`<span class="neg">· pick 3</span>`}</div>
+      <div class="chips">${players.map((p) => html`<button type="button" class="chip" aria-pressed=${g.players.includes(p.id)}
+        disabled=${!g.players.includes(p.id) && g.players.length >= 3} onClick=${() => toggle(p.id)}>${first(p.name)}${ready && g.players.includes(p.id) && g.handicap.mode === 'net' ? ` · ${strokes[p.id] ?? 0}` : ''}</button>`)}</div>
+    </div>
+    <${Opt} title="Per point" desc="Dollars each point is worth">
+      <${Stepper} label="Dollars per point" value=${g.stake} min=${1} max=${100} step=${1} format=${(v) => `$${v}`} onChange=${(v) => upd({ stake: v })} />
+    </${Opt}>
+    <div class="opt-sub"><${Seg} value=${g.handicap.mode} onChange=${(v) => upd({ handicap: { ...g.handicap, mode: v } })} options=${[{ value: 'net', label: 'Net' }, { value: 'gross', label: 'Gross' }]} /></div>
+    ${g.handicap.mode === 'net' && html`
+      <${Opt} title="Allowance" desc="Share of each course handicap used">
+        <${Stepper} label="9 Point allowance" value=${g.handicap.allowance} min=${50} max=${100} step=${5} format=${(v) => `${v}%`}
+          onChange=${(v) => upd({ handicap: { ...g.handicap, allowance: v } })} />
+      </${Opt}>
+      <div class="opt-sub"><${Seg} tall value=${g.handicap.strokesOff} onChange=${(v) => upd({ handicap: { ...g.handicap, strokesOff: v } })} options=${[
+        { value: 'match', label: 'Low man', sub: 'off the best of 3' },
+        { value: 'full', label: 'Full', sub: 'everyone' },
+      ]} /></div>`}
+    <${Opt} title="Win by 2 takes all 9" desc="Beating both others by 2 or more scores 9-0-0">
+      <${Switch} label="Win by 2 takes all 9" on=${g.sweep} onChange=${(v) => upd({ sweep: v })} />
+    </${Opt}>
+    ${g.sweep && html`<${Opt} title="Birdie doubles a sweep" desc=${g.birdieDoubles ? (g.netBirdies ? 'A sweep with a birdie, natural or net, pays 18' : 'A sweep with a natural birdie pays 18') : 'Off'}>
+      <${Switch} label="Birdie doubles a sweep" on=${g.birdieDoubles} onChange=${(v) => upd({ birdieDoubles: v })} />
+    </${Opt}>`}
+    ${g.sweep && g.birdieDoubles && g.handicap.mode === 'net' && html`<${Opt} title="Net birdies count" desc="A net birdie also doubles a sweep">
+      <${Switch} label="Net birdies count" on=${g.netBirdies} onChange=${(v) => upd({ netBirdies: v })} />
+    </${Opt}>`}
+    <${Opt} title="Carryovers" desc="All three tied: nobody scores and the next hole is worth double">
+      <${Switch} label="Carryovers" on=${g.carryovers} onChange=${(v) => upd({ carryovers: v })} />
+    </${Opt}>
+    <div class="opt-sub">
+      <div class="eyebrow" style="margin-bottom:8px">Settle up</div>
+      <${Seg} tall value=${g.settle} onChange=${(v) => upd({ settle: v })} options=${[
+        { value: 'average', label: 'Vs. average', sub: '60/54/48 pts → +6/0/−6' },
+        { value: 'pairs', label: 'Pair by pair', sub: '60/54/48 pts → +18/0/−18' },
+      ]} />
+    </div>
   </div>`;
 }
 
@@ -1246,11 +1318,15 @@ function GameSetup({ round, game, setGame, ids, players, teams, setTeams, wheel,
 
 // ---------- Round ----------
 function useRoundData(round) {
-  return useMemo(() => N.settleRound(round), [round]);
+  return useMemo(() => G.settleAll(round), [round]);
 }
 function displayStrokes(round) {
   const ids = round.players.map((p) => p.id);
   const m = round.game.matches;
+  if (!m.length) {
+    const np = G.sideGamesOf(round).find((g) => g.type === 'ninepoint');
+    return np ? NP.ninePointStrokes(round, np) : Object.fromEntries(ids.map((id) => [id, 0]));
+  }
   if (m.length === 1 && [...m[0].a, ...m[0].b].length === ids.length) return N.matchStrokes(round, m[0]);
   const g = round.game.handicap.strokesOff === 'full' ? round.game : { ...round.game, handicap: { ...round.game.handicap, strokesOff: 'group' } };
   return N.matchStrokes({ ...round, game: g }, { a: ids, b: [] });
@@ -1378,10 +1454,11 @@ function ScoreTab({ round, data, dispatch, toast, onSettle }) {
 
     <${DayTotal} round=${round} data=${data} />
 
-    <div class="section">
-      <div class="section-head"><h2>Matches</h2><span class="meta">${round.game.autoPress.enabled ? `${round.game.autoPress.down}-down autos` : 'No auto presses'}</span></div>
+    ${data.matches.length > 0 && html`<div class="section">
+      <div class="section-head"><h2>Nassau</h2><span class="meta">${round.game.autoPress.enabled ? `${round.game.autoPress.down}-down autos` : 'No auto presses'}</span></div>
       ${data.matches.map((c) => html`<${MatchCard} round=${round} c=${c} dispatch=${dispatch} compact />`)}
-    </div>
+    </div>`}
+    ${data.side.map((r) => html`<${NinePointCard} round=${round} r=${r} hole=${h} />`)}
 
     <div class="fab-row"><div class="dock-inner">
       ${h < 17
@@ -1449,6 +1526,44 @@ function CardTab({ round, data, dispatch }) {
   </main>`;
 }
 
+/** A 9 Point game: points and money so far. `hole` highlights one hole (Score tab); `detail` adds the hole-by-hole grid (Bets tab). */
+function NinePointCard({ round, r, hole, detail }) {
+  const g = r.game;
+  const pl = g.players.map((id) => round.players.find((p) => p.id === id)).filter(Boolean);
+  const ranked = [...pl].sort((a, b) => r.totals[b.id] - r.totals[a.id]);
+  const cur = hole != null ? r.holes[hole] : null;
+  const tag = (x) => (x.sweep ? (x.birdie ? 'Birdie sweep' : 'Sweep') : x.allTie && g.carryovers ? 'Carry' : null);
+  const holes = Array.from({ length: 18 }, (_, i) => i);
+  const nine = (s) => holes.slice(s, s + 9);
+  const part = (id, s) => nine(s).reduce((t, i) => t + (r.holes[i]?.points[id] ?? 0), 0);
+  return html`<div class="card match np-card">
+    <div class="section-head">
+      <h2>9 Point</h2>
+      <span class="meta">${NP.ninePointSummary(g)}</span>
+    </div>
+    ${cur && html`<div class="np-hole">Hole ${hole + 1}: ${pl.map((p) => html`<span><b>${first(p.name)}</b> ${cur.points[p.id]}</span>`)}
+      ${tag(cur) && html`<span class="pill a">${tag(cur)}${cur.multiplier > 1 ? ` ×${cur.multiplier}` : ''}</span>`}</div>`}
+    ${r.pendingCarry > 0 && r.thru < 18 && html`<div class="np-hole"><span class="pill b">Next hole is worth ×${r.pendingCarry + 1}</span></div>`}
+    <div class="np-rows">${ranked.map((p) => html`<div class="np-row">
+      <${Avatar} p=${p} size="sm" />
+      <span class="grow">${first(p.name)} <span class="note">${r.strokes[p.id] ? `${r.strokes[p.id]} ${r.strokes[p.id] === 1 ? 'stroke' : 'strokes'}` : ''}</span></span>
+      <span class="np-pts num">${r.totals[p.id]} pts</span>
+      <b class=${`num ${moneyCls(r.money[p.id] || 0)}`}>${money(r.money[p.id] || 0)}</b>
+    </div>`)}</div>
+    ${detail && html`<div class="sc-wrap"><table class="sc">
+      <tbody>
+        <tr class="hdr"><th class="stick" scope="col">Hole</th>${nine(0).map((i) => html`<td>${i + 1}</td>`)}<td class="tot">Out</td>${nine(9).map((i) => html`<td>${i + 1}</td>`)}<td class="tot">In</td><td class="tot">Tot</td></tr>
+        ${pl.map((p) => html`<tr><td class="stick">${first(p.name)}</td>
+          ${nine(0).map((i) => html`<td class=${r.holes[i]?.sweep && r.holes[i].points[p.id] ? 'np-sweep' : ''}>${r.holes[i]?.points[p.id] ?? ''}</td>`)}<td class="tot">${part(p.id, 0)}</td>
+          ${nine(9).map((i) => html`<td class=${r.holes[i]?.sweep && r.holes[i].points[p.id] ? 'np-sweep' : ''}>${r.holes[i]?.points[p.id] ?? ''}</td>`)}<td class="tot">${part(p.id, 9)}</td><td class="tot">${r.totals[p.id]}</td>
+        </tr>`)}
+        ${g.carryovers && html`<tr class="si"><td class="stick">Value</td>${nine(0).map((i) => html`<td>${r.holes[i] ? (r.holes[i].allTie ? 'C' : `×${r.holes[i].multiplier}`) : ''}</td>`)}<td class="tot"></td>${nine(9).map((i) => html`<td>${r.holes[i] ? (r.holes[i].allTie ? 'C' : `×${r.holes[i].multiplier}`) : ''}</td>`)}<td class="tot"></td><td class="tot"></td></tr>`}
+      </tbody>
+    </table></div>
+    <p class="note" style="margin:0">5-3-1 per hole; ties 4-4-1, 5-2-2, 3-3-3.${g.sweep ? ' Winning by 2 takes all 9 (highlighted).' : ''}${g.carryovers ? ' C = all tied, carried to the next hole.' : ''} Money is ${g.settle === 'pairs' ? 'each pair\u2019s point difference' : 'points against the group\u2019s average'} × $${g.stake}.</p>`}
+  </div>`;
+}
+
 function Ribbon({ b, seg }) {
   const n = seg.end - seg.start + 1;
   return html`<div class="ribbon" style=${{ '--n': n }}>
@@ -1464,16 +1579,16 @@ function Ribbon({ b, seg }) {
 
 /** Net across every match in the round: what each player is up or down for the day right now. */
 function DayTotal({ round, data }) {
-  if (data.matches.length < 2) return null;
+  if (data.matches.length + data.side.length < 2) return null;
   const ranked = [...round.players].sort((a, b) => data.projected[b.id] - data.projected[a.id]);
-  const label = `${round.game.format === 'wheel' ? 'Wheel' : 'Day'} net`;
+  const label = `${round.game.format === 'wheel' && !data.side.length ? 'Wheel' : 'Day'} net`;
   return html`<div class="board day-total">
     <div class="board-head"><span class="board-title">${label}</span><span class="board-tag">${round.status === 'final' ? 'Final' : 'If it ended now'}</span></div>
     <div class="board-rows">${ranked.map((p) => {
       const parts = data.matches.filter((c) => c.match.a.includes(p.id) || c.match.b.includes(p.id)).map((c) => ({
         v: c.net[p.id] || 0,
         vs: sideNames(round, c.match.a.includes(p.id) ? c.match.b : c.match.a).split(' & ').map((n) => n[0]).join(''),
-      }));
+      })).concat(data.side.filter((r) => r.game.players.includes(p.id)).map((r) => ({ v: r.money[p.id] || 0, vs: '9 Pt' })));
       return html`<div class="board-row" style="grid-template-columns:minmax(0,1fr) auto">
         <div style="min-width:0">
           <div class="pname">${first(p.name)}</div>
@@ -1521,7 +1636,8 @@ function BetsTab({ round, data, dispatch }) {
         </div>
       </div>`;
     })}
-    <p class="note">Each cell is the bet's running status after that hole. Ties push. A press runs from its first hole to the end of its nine (or the 18).</p>
+    ${data.side.map((r) => html`<div class="section"><${NinePointCard} round=${round} r=${r} detail /></div>`)}
+    ${data.matches.length > 0 && html`<p class="note">Each cell is the bet's running status after that hole. Ties push. A press runs from its first hole to the end of its nine (or the 18).</p>`}
   </main>`;
 }
 
@@ -1542,7 +1658,7 @@ function SettleTab({ round, data, dispatch, go, toast }) {
   return html`<main class="page with-tabs fade-in">
     ${!final && html`<div class="banner">${I.info}<span>${allIn ? 'All 18 are in. Finish the round to lock the numbers.' : 'Live numbers: what everyone wins or owes if the round ended right now.'}</span></div>`}
     <div class="board">
-      <div class="board-head"><span class="board-title">${final ? 'Final' : 'Projected'}</span><span class="board-tag">${round.game.matches.length} ${round.game.matches.length === 1 ? 'match' : 'matches'}</span></div>
+      <div class="board-head"><span class="board-title">${final ? 'Final' : 'Projected'}</span><span class="board-tag">${G.gamesLabel(round)}</span></div>
       <div class="board-rows">${ranked.map((p) => html`<div class="board-row" style="grid-template-columns:1fr auto">
         <span class="pname">${p.name}</span><span class=${`tile ${bal[p.id] < 0 ? 'down' : 'up'}`} style="min-width:84px">${money(bal[p.id])}</span>
       </div>`)}</div>
@@ -1560,8 +1676,8 @@ function SettleTab({ round, data, dispatch, go, toast }) {
       </div>
     </div>
 
-    <div class="section">
-      <div class="section-head"><h2>By match</h2></div>
+    ${data.matches.length > 0 && html`<div class="section">
+      <div class="section-head"><h2>Nassau by match</h2></div>
       <div class="card rows">${data.matches.map((c) => {
         const bets = c.segments.flatMap((s) => s.bets.filter((b) => b.started));
         return html`<div style="padding:14px 16px;display:flex;flex-direction:column;gap:8px">
@@ -1572,7 +1688,8 @@ function SettleTab({ round, data, dispatch, go, toast }) {
           </div>`)}
         </div>`;
       })}</div>
-    </div>
+    </div>`}
+    ${data.side.map((r) => html`<div class="section"><${NinePointCard} round=${round} r=${r} /></div>`)}
 
     <div style="display:flex;flex-direction:column;gap:10px">
       <button type="button" class="btn ghost block" onClick=${() => {

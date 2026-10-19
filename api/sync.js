@@ -94,6 +94,13 @@ const handlers = {
     const course = r.course || bad('round needs a course');
     const [known] = course.id ? await sql`select 1 from courses where id = ${course.id} and group_id = ${g}` : [];
     const status = r.status === 'final' ? 'final' : 'live';
+    const sideGames = Array.isArray(r.sideGames) ? r.sideGames : [];
+    if (sideGames.length > 8) bad('at most 8 side games');
+    for (const g of sideGames) {
+      if (g?.type !== 'ninepoint') bad(`unknown game ${g?.type}`);
+      if (!Array.isArray(g.players) || g.players.length !== 3 || g.players.some((p) => !ids.includes(p))) bad('9 Point needs 3 of the round\u2019s players');
+      if (!(Number.isFinite(g.stake) && g.stake >= 0 && g.stake <= 10000)) bad('9 Point stake must be 0-10,000');
+    }
     const startedAt = new Date(Number.isFinite(r.createdAt) ? r.createdAt : Date.now()).toISOString();
 
     const scoreRows = [];
@@ -108,11 +115,11 @@ const handlers = {
       ...missing.map((p) => sql`insert into players (id, group_id, name, handicap_index, color, archived_at)
         values (${p.id}, ${g}, ${str(p.name, 'player.name')}, ${numOrNull(p.index, 'player.index')}, ${p.color ?? null}, now())
         on conflict (id) do nothing`),
-      sql`insert into rounds (id, group_id, course_id, tee_set_id, course_snapshot, game, status, current_hole, created_by, started_at, finished_at)
-        values (${id}, ${g}, ${known ? course.id : null}, ${course.teeId ?? null}, ${JSON.stringify(course)}::jsonb, ${JSON.stringify(r.game ?? {})}::jsonb,
+      sql`insert into rounds (id, group_id, course_id, tee_set_id, course_snapshot, game, side_games, status, current_hole, created_by, started_at, finished_at)
+        values (${id}, ${g}, ${known ? course.id : null}, ${course.teeId ?? null}, ${JSON.stringify(course)}::jsonb, ${JSON.stringify(r.game ?? {})}::jsonb, ${JSON.stringify(sideGames)}::jsonb,
           ${status}, ${int(r.hole ?? 0, 'hole', 0, 17)}, ${user.id}, ${startedAt}, ${status === 'final' ? new Date().toISOString() : null})
         on conflict (id) do update set course_id = excluded.course_id, tee_set_id = excluded.tee_set_id,
-          course_snapshot = excluded.course_snapshot, game = excluded.game, status = excluded.status,
+          course_snapshot = excluded.course_snapshot, game = excluded.game, side_games = excluded.side_games, status = excluded.status,
           current_hole = excluded.current_hole, finished_at = coalesce(rounds.finished_at, excluded.finished_at),
           deleted_at = null, updated_at = now()`,
       sql`delete from round_players where round_id = ${id} and not (player_id = any(${ids}::text[]))`,

@@ -1,4 +1,4 @@
-import { pairwiseRound } from '../../nassau.js';
+import { pairwiseAll } from '../../games.js';
 
 const num = (v) => (v == null ? null : Number(v));
 export { num };
@@ -9,7 +9,7 @@ export { num };
  */
 export async function loadRounds(sql, { groupId, roundId }) {
   const [rounds, roundPlayers, scores, presses] = await Promise.all([
-    sql`select id, course_snapshot, game, status, current_hole, started_at from rounds
+    sql`select id, course_snapshot, game, side_games, status, current_hole, started_at from rounds
       where deleted_at is null and (group_id = ${groupId ?? null} or id = ${roundId ?? null}) order by started_at desc`,
     sql`select rp.round_id, rp.player_id, rp.name, rp.handicap_index, rp.color from round_players rp join rounds r on r.id = rp.round_id
       where r.deleted_at is null and (r.group_id = ${groupId ?? null} or r.id = ${roundId ?? null}) order by rp.seat`,
@@ -25,6 +25,7 @@ export async function loadRounds(sql, { groupId, roundId }) {
     players: [],
     scores: {},
     game: r.game,
+    sideGames: r.side_games ?? [],
     presses: [],
     hole: r.current_hole,
     status: r.status,
@@ -45,7 +46,7 @@ export async function loadRounds(sql, { groupId, roundId }) {
 }
 
 /**
- * Rewrites a round's ledger rows: the pairwise money from its finished bets
+ * Rewrites a round's ledger rows: the pairwise money from its finished bets in every game
  * when the round is final, nothing otherwise (live, reopened or deleted).
  */
 export async function refreshLedger(sql, roundId) {
@@ -55,7 +56,7 @@ export async function refreshLedger(sql, roundId) {
     return;
   }
   const [round] = await loadRounds(sql, { roundId });
-  const entries = pairwiseRound(round);
+  const entries = pairwiseAll(round);
   await sql.transaction([
     sql`delete from ledger_entries where round_id = ${roundId}`,
     sql`insert into ledger_entries (round_id, winner_id, loser_id, amount)
