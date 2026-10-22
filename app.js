@@ -961,6 +961,8 @@ function Setup({ state, dispatch, go, user }) {
   const [teams, setTeams] = useState({});
   const [scoring, setScoring] = useState('bestball');
   const [custom, setCustom] = useState([]);
+  const [customDraft, setCustomDraft] = useState(null); // the custom match being built, before "Add"
+
   const [adding, setAdding] = useState(false);
   const [addingCourse, setAddingCourse] = useState(false);
   const [scan, setScan] = useState(null); // scorecard result awaiting review
@@ -992,7 +994,8 @@ function Setup({ state, dispatch, go, user }) {
     setSideGames((gs) => gs.map((g) => ({ ...g, players: g.players.filter((id) => ids.includes(id)) })));
   }, [ids.join()]);
 
-  const matches = useMemo(() => N.buildMatches(game.format, ids, teams, scoring, custom, wheel), [game.format, ids, teams, scoring, custom, wheel]);
+  const allCustom = customDraft ? [...custom, customDraft] : custom;
+  const matches = useMemo(() => N.buildMatches(game.format, ids, teams, scoring, allCustom, wheel), [game.format, ids, teams, scoring, custom, customDraft, wheel]);
   const draftRound = course && { course, players: selected, scores: {}, game: { ...game, matches }, sideGames };
   const sideOk = sideGames.every((g) => g.players.length === 3 && g.players.every((id) => ids.includes(id)));
   const gamesOk = (nassauOn ? matches.length > 0 : sideGames.length > 0) && sideOk;
@@ -1127,7 +1130,7 @@ function Setup({ state, dispatch, go, user }) {
             open=${openGame === 'nassau'} onToggle=${() => setOpenGame(openGame === 'nassau' ? null : 'nassau')}
             onRemove=${() => { setNassauOn(false); setOpenGame(null); }}>
             <${GameSetup} round=${draftRound} game=${game} setGame=${setGame} ids=${ids} players=${selected}
-              teams=${teams} setTeams=${setTeams} wheel=${wheel} setWheel=${setWheel} scoring=${scoring} setScoring=${setScoring} custom=${custom} setCustom=${setCustom} matches=${matches} />
+              teams=${teams} setTeams=${setTeams} wheel=${wheel} setWheel=${setWheel} scoring=${scoring} setScoring=${setScoring} custom=${custom} setCustom=${setCustom} setCustomDraft=${setCustomDraft} matches=${matches} />
           </${GameCard}>`}
           ${sideGames.map((g, i) => html`<${GameCard} title=${sideGames.length > 1 ? `9 Point ${i + 1}` : '9 Point'}
             summary=${`${g.players.map((id) => first(selected.find((p) => p.id === id)?.name ?? '?')).join(', ')} · ${NP.ninePointSummary(g)}`}
@@ -1167,18 +1170,26 @@ function SideToggle({ value, onChange, allowOut }) {
   </div>`;
 }
 
-function CustomMatchBuilder({ players, onAdd }) {
+/**
+ * Builds one custom match. The match being built already counts (onDraft), so a single
+ * match needs no extra tap; "Add match" saves it and starts another.
+ */
+function CustomMatchBuilder({ players, onAdd, onDraft, hasOthers }) {
   const [sides, setSides] = useState({});
   const [sc, setSc] = useState('bestball');
+  const [draftId, setDraftId] = useState(() => uid('m-'));
   const a = players.filter((p) => sides[p.id] === 'a').map((p) => p.id);
   const b = players.filter((p) => sides[p.id] === 'b').map((p) => p.id);
+  const ready = a.length > 0 && b.length > 0;
+  useEffect(() => { onDraft?.(ready ? { id: draftId, a, b, scoring: sc } : null); }, [a.join(), b.join(), sc]);
   return html`<div class="card">
-    <div class="opt" style="padding-bottom:6px"><div class="grow"><div class="t">New match</div><div class="d">Put players on side A or B. Leave out anyone not in it.</div></div></div>
+    <div class="opt" style="padding-bottom:6px"><div class="grow"><div class="t">${hasOthers ? 'Another match' : 'Match'}</div><div class="d">Put players on side A or B. Tap \u2014 for anyone sitting out.</div></div></div>
     <div class="rows">${players.map((p) => html`<div class="row" style="min-height:54px"><${Avatar} p=${p} size="sm" /><div class="grow"><div class="name">${p.name}</div></div>
       <${SideToggle} value=${sides[p.id]} allowOut onChange=${(v) => setSides({ ...sides, [p.id]: v === 'x' ? undefined : v })} /></div>`)}</div>
     ${(a.length > 1 || b.length > 1) && html`<div class="opt-sub" style="padding-top:12px"><${Seg} value=${sc} onChange=${setSc} options=${[{ value: 'bestball', label: 'Best ball' }, { value: 'aggregate', label: 'Aggregate' }]} /></div>`}
-    <div class="opt-sub" style="padding-top:12px"><button type="button" class="btn soft block" disabled=${!a.length || !b.length}
-      onClick=${() => { onAdd({ id: uid('m-'), a, b, scoring: sc }); setSides({}); }}>${I.plus} Add match</button></div>
+    ${ready && html`<div class="opt-sub note" style="padding-top:12px">${I.check} This match is in the game. Add it to set up another one.</div>`}
+    <div class="opt-sub" style="padding-top:12px"><button type="button" class="btn soft block" disabled=${!ready}
+      onClick=${() => { onAdd({ id: draftId, a, b, scoring: sc }); setSides({}); setDraftId(uid('m-')); }}>${I.plus} Add it and set up another match</button></div>
   </div>`;
 }
 
@@ -1260,7 +1271,7 @@ function NinePointSetup({ round, g, players, onChange, onRemove }) {
   </div>`;
 }
 
-function GameSetup({ round, game, setGame, ids, players, teams, setTeams, wheel, setWheel, scoring, setScoring, custom, setCustom, matches }) {
+function GameSetup({ round, game, setGame, ids, players, teams, setTeams, wheel, setWheel, scoring, setScoring, custom, setCustom, setCustomDraft, matches }) {
   const upd = (patch) => setGame({ ...game, ...patch });
   const st = game.stakes;
   const same = st.front === st.back && st.back === st.overall;
@@ -1294,11 +1305,12 @@ function GameSetup({ round, game, setGame, ids, players, teams, setTeams, wheel,
       ${game.format === 'teams' && html`<div class="card">
         <div class="rows">${players.map((p) => html`<div class="row" style="min-height:56px"><${Avatar} p=${p} size="sm" />
           <div class="grow"><div class="name">${p.name}</div></div>
-          <${SideToggle} value=${teams[p.id]} onChange=${(v) => setTeams({ ...teams, [p.id]: v })} /></div>`)}</div>
+          <${SideToggle} value=${teams[p.id]} allowOut onChange=${(v) => setTeams({ ...teams, [p.id]: v === 'x' ? undefined : v })} /></div>`)}</div>
         ${matches[0] && (matches[0].a.length > 1 || matches[0].b.length > 1) && html`<div class="opt-sub" style="padding-top:12px">
           <${Seg} value=${scoring} onChange=${setScoring} options=${[{ value: 'bestball', label: 'Best ball' }, { value: 'aggregate', label: 'Aggregate' }]} />
         </div>`}
         ${matches[0] && matches[0].a.length !== matches[0].b.length && html`<div class="opt-sub note">Uneven sides: each winner collects the stake and the losing side splits the total.</div>`}
+        ${players.some((p) => !teams[p.id]) && matches.length > 0 && html`<div class="opt-sub note">${players.filter((p) => !teams[p.id]).map((p) => first(p.name)).join(', ')} ${players.filter((p) => !teams[p.id]).length === 1 ? 'sits' : 'sit'} out of the Nassau.</div>`}
         ${!matches.length && html`<div class="opt-sub note neg">Each side needs at least one player.</div>`}
       </div>`}
       ${game.format === 'wheel' && html`<div class="card">
@@ -1325,7 +1337,7 @@ function GameSetup({ round, game, setGame, ids, players, teams, setTeams, wheel,
           <span class="note">${m.a.length + m.b.length > 2 ? (m.scoring === 'aggregate' ? 'Agg' : 'Best ball') : ''}</span>
           <button type="button" class="x-btn" aria-label="Remove match" onClick=${() => setCustom(custom.filter((x) => x.id !== m.id))}>${I.x}</button>
         </div>`)}</div>`}
-        <${CustomMatchBuilder} players=${players} onAdd=${(m) => setCustom([...custom, m])} />
+        <${CustomMatchBuilder} players=${players} hasOthers=${custom.length > 0} onDraft=${setCustomDraft} onAdd=${(m) => { setCustomDraft(null); setCustom([...custom, m]); }} />
       `}
     </div>
 
