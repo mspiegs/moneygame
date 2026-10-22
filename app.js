@@ -45,6 +45,8 @@ function money(v, { sign = true } = {}) {
 }
 const moneyCls = (v) => (Math.round(v * 100) === 0 ? 'zero' : v > 0 ? 'pos' : 'neg');
 const fmtIndex = (i) => (i < 0 ? `+${Math.abs(i).toFixed(1)}` : i.toFixed(1));
+/** Course handicap as golfers write it: a plus handicap shows as +2, not -2. */
+const fmtCH = (n) => (n < 0 ? `+${-n}` : String(n));
 const dateLabel = (ts) => new Date(ts).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 
 function Avatar({ p, size = '' }) {
@@ -683,16 +685,34 @@ function Opponent({ state, dispatch, user, go, id }) {
 }
 
 // ---------- Players ----------
+/** A handicap index as the golfer writes it: plus handicaps get a leading "+" (stored as negative). */
+const indexText = (n) => (n == null || Number.isNaN(n) ? '' : n < 0 ? `+${Math.abs(n)}` : String(n));
+
+/**
+ * Handicap index field. Phone number pads have no "+" key, so plus handicaps get a
+ * toggle beside the field. `value` is text like "12.4" or "+1.2".
+ */
+function IndexInput({ id, value, onChange, label = 'Handicap index' }) {
+  const plus = value.startsWith('+');
+  const digits = value.replace(/^\+/, '');
+  return html`<div class="index-input">
+    <button type="button" class="plus-toggle" aria-pressed=${plus} aria-label="Plus handicap" title="Plus handicap"
+      onClick=${() => onChange(plus ? digits : `+${digits}`)}>+</button>
+    <input id=${id} class="input" inputmode="decimal" aria-label=${label} value=${digits} placeholder=${plus ? '1.2' : '12.4'}
+      onInput=${(e) => { const d = e.target.value.replace(/[^0-9.]/g, ''); onChange(plus ? `+${d}` : d); }} />
+  </div>`;
+}
+
 function PlayerForm({ initial, onSave, onCancel, submitLabel = 'Add player' }) {
   const [name, setName] = useState(initial?.name ?? '');
-  const [idx, setIdx] = useState(initial ? String(initial.index) : '');
+  const [idx, setIdx] = useState(initial ? indexText(initial.index) : '');
   const parsed = parseFloat(idx.replace('+', '-'));
   const valid = name.trim() && !Number.isNaN(parsed) && parsed >= -10 && parsed <= 54;
   return html`<form class="card pad" style="display:flex;flex-direction:column;gap:12px" onSubmit=${(e) => { e.preventDefault(); if (valid) onSave({ name: name.trim(), index: parsed }); }}>
     <div class="form-grid">
       <div class="field span"><label for="pf-name">Name</label><input id="pf-name" class="input" value=${name} onInput=${(e) => setName(e.target.value)} placeholder="e.g. Kevin Walsh" autocomplete="off" /></div>
-      <div class="field"><label for="pf-idx">Handicap index</label><input id="pf-idx" class="input" inputmode="decimal" value=${idx} onInput=${(e) => setIdx(e.target.value)} placeholder="12.4" /></div>
-      <div class="field" style="justify-content:flex-end"><span class="note">Use + for plus handicaps, like +1.2</span></div>
+      <div class="field"><label for="pf-idx">Handicap index</label><${IndexInput} id="pf-idx" value=${idx} onChange=${setIdx} /></div>
+      <div class="field" style="justify-content:flex-end"><span class="note">Plus handicap? Tap + first, then type it (e.g. 1.2).</span></div>
     </div>
     <div style="display:flex;gap:10px">
       ${onCancel && html`<button type="button" class="btn ghost" onClick=${onCancel}>Cancel</button>`}
@@ -738,7 +758,7 @@ function Players({ state, dispatch, user, syncStatus }) {
         ? html`<div style="padding:4px"><${PlayerForm} initial=${p} submitLabel="Save" onCancel=${() => setEditing(null)} onSave=${(v) => { dispatch({ type: 'updatePlayer', id: p.id, patch: { ...v, sample: false } }); setEditing(null); }} /></div>`
         : html`<div class="row">
           <${Avatar} p=${p} />
-          <div class="grow"><div class="name">${p.name}</div><div class="meta">Index ${fmtIndex(p.index)} · CH ${N.courseHandicap(p.index, withTee(state.courses[0] || SAMPLE_COURSE))} at ${(state.courses[0] || SAMPLE_COURSE).name} (${withTee(state.courses[0] || SAMPLE_COURSE).tees})${p.sample ? ' · sample' : ''}${p.userId === user.id ? ' · you' : p.userId ? ' · joined' : ''}</div></div>
+          <div class="grow"><div class="name">${p.name}</div><div class="meta">Index ${fmtIndex(p.index)} · CH ${fmtCH(N.courseHandicap(p.index, withTee(state.courses[0] || SAMPLE_COURSE)))} at ${(state.courses[0] || SAMPLE_COURSE).name} (${withTee(state.courses[0] || SAMPLE_COURSE).tees})${p.sample ? ' · sample' : ''}${p.userId === user.id ? ' · you' : p.userId ? ' · joined' : ''}</div></div>
           ${!p.sample && !p.userId && confirm !== p.id && html`<button type="button" class="link" onClick=${() => setInviting(inviting === p.id ? null : p.id)}>Invite</button>`}
           ${confirm === p.id
             ? html`<button type="button" class="btn danger sm" onClick=${() => { dispatch({ type: 'removePlayer', id: p.id }); setConfirm(null); }}>Remove</button>
@@ -824,10 +844,10 @@ function ScanReview({ result, players, par, notes, allowNew = false, maxPlayers 
           </div>
           ${r.playerId === 'new' && html`<div class="form-grid scan-new">
             <div class="field"><label>Name</label><input class="input" value=${r.newName} onInput=${(e) => setRow(i, { newName: e.target.value })} placeholder="Full name" autocomplete="off" /></div>
-            <div class="field"><label>Handicap index</label><input class="input" inputmode="decimal" value=${r.newIndex} onInput=${(e) => setRow(i, { newIndex: e.target.value })} placeholder="12.4" /></div>
+            <div class="field"><label>Handicap index</label><${IndexInput} value=${r.newIndex} onChange=${(v) => setRow(i, { newIndex: v })} /></div>
           </div>`}
         </div>`)}
-        ${!newOk && html`<div class="note neg">New players need a name and a handicap index (use + for plus handicaps, like +1.2).</div>`}
+        ${!newOk && html`<div class="note neg">New players need a name and a handicap index. For a plus handicap, tap + beside the number.</div>`}
         ${tooMany && html`<div class="note neg">A round can have up to ${maxPlayers} players. Skip the rows that weren't in your game.</div>`}
       </div>
       <div class="sc-wrap"><table class="sc scan-grid">
@@ -1059,7 +1079,7 @@ function Setup({ state, dispatch, go, user }) {
             const on = ids.includes(p.id);
             return html`<button type="button" class="pick" aria-pressed=${on} disabled=${!on && ids.length >= MAX_PLAYERS} onClick=${() => toggle(p.id)}>
               <${Avatar} p=${p} />
-              <div style="flex:1;min-width:0"><div style="font-weight:700">${p.name}</div><div class="note">Index ${fmtIndex(p.index)}${course ? ` · CH ${N.courseHandicap(p.index, course)}` : ''}</div></div>
+              <div style="flex:1;min-width:0"><div style="font-weight:700">${p.name}</div><div class="note">Index ${fmtIndex(p.index)}${course ? ` · CH ${fmtCH(N.courseHandicap(p.index, course))}` : ''}</div></div>
               <span class="check">${I.check}</span>
             </button>`;
           })}

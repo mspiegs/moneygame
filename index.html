@@ -152,6 +152,11 @@ table.scan-grid tr.skipped td { opacity: .45; }
 .np-row .grow { flex: 1; min-width: 0; font-weight: 650; }
 .np-pts { color: var(--ink-2); font-weight: 700; font-size: 13.5px; }
 table.sc td.np-sweep { background: var(--flag-soft); font-weight: 800; }
+.index-input { display: flex; gap: 6px; min-width: 0; }
+.index-input .input { flex: 1; }
+.plus-toggle { flex: none; width: 46px; height: 46px; border-radius: 12px; background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--line);
+  font-size: 22px; font-weight: 800; color: var(--ink-3); }
+.plus-toggle[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); box-shadow: none; }
 .spinner { width: 18px; height: 18px; border-radius: 50%; border: 2.5px solid currentColor; border-right-color: transparent; animation: spin .8s linear infinite; flex: none; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
