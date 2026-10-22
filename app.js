@@ -1200,7 +1200,7 @@ function CustomMatchBuilder({ players, onAdd, onDraft, hasOthers, draft }) {
     <div class="rows">${players.map((p) => html`<div class="row" style="min-height:54px"><${Avatar} p=${p} size="sm" /><div class="grow"><div class="name">${p.name}</div></div>
       <${SideToggle} value=${sides[p.id]} allowOut onChange=${(v) => setSides({ ...sides, [p.id]: v === 'x' ? undefined : v })} /></div>`)}</div>
     ${(a.length > 1 || b.length > 1) && html`<div class="opt-sub" style="padding-top:12px"><${Seg} value=${sc} onChange=${setSc} options=${[{ value: 'bestball', label: 'Best ball' }, { value: 'aggregate', label: 'Aggregate' }]} /></div>`}
-    ${ready && html`<div class="opt-sub note" style="padding-top:12px">${I.check} This match is in the game. Add it to set up another one.</div>`}
+    ${ready && html`<div class="opt-sub note" style="padding-top:12px">This match is in the game. Add it to set up another one.</div>`}
     <div class="opt-sub" style="padding-top:12px"><button type="button" class="btn soft block" disabled=${!ready}
       onClick=${() => { onAdd({ id: draftId, a, b, scoring: sc }); setSides({}); setDraftId(uid('m-')); }}>${I.plus} Add it and set up another match</button></div>
   </div>`;
