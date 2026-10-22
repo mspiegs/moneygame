@@ -689,15 +689,16 @@ function Opponent({ state, dispatch, user, go, id }) {
 const indexText = (n) => (n == null || Number.isNaN(n) ? '' : n < 0 ? `+${Math.abs(n)}` : String(n));
 
 /**
- * Handicap index field. Phone number pads have no "+" key, so plus handicaps get a
- * toggle beside the field. `value` is text like "12.4" or "+1.2".
+ * Handicap index field. Phone number pads have no "+" key, so a sign button sits beside
+ * the number: it shows "−" for a regular handicap and "+" for a plus handicap; tap to switch.
+ * `value` is text like "12.4" or "+1.2".
  */
 function IndexInput({ id, value, onChange, label = 'Handicap index' }) {
   const plus = value.startsWith('+');
   const digits = value.replace(/^\+/, '');
   return html`<div class="index-input">
-    <button type="button" class="plus-toggle" aria-pressed=${plus} aria-label="Plus handicap" title="Plus handicap"
-      onClick=${() => onChange(plus ? digits : `+${digits}`)}>+</button>
+    <button type="button" class="plus-toggle" aria-pressed=${plus} aria-label=${plus ? 'Plus handicap (tap for a regular handicap)' : 'Regular handicap (tap for a plus handicap)'}
+      title=${plus ? 'Plus handicap' : 'Regular handicap'} onClick=${() => onChange(plus ? digits : `+${digits}`)}>${plus ? '+' : '\u2212'}</button>
     <input id=${id} class="input" inputmode="decimal" aria-label=${label} value=${digits} placeholder=${plus ? '1.2' : '12.4'}
       onInput=${(e) => { const d = e.target.value.replace(/[^0-9.]/g, ''); onChange(plus ? `+${d}` : d); }} />
   </div>`;
@@ -712,7 +713,7 @@ function PlayerForm({ initial, onSave, onCancel, submitLabel = 'Add player' }) {
     <div class="form-grid">
       <div class="field span"><label for="pf-name">Name</label><input id="pf-name" class="input" value=${name} onInput=${(e) => setName(e.target.value)} placeholder="e.g. Kevin Walsh" autocomplete="off" /></div>
       <div class="field"><label for="pf-idx">Handicap index</label><${IndexInput} id="pf-idx" value=${idx} onChange=${setIdx} /></div>
-      <div class="field" style="justify-content:flex-end"><span class="note">Plus handicap? Tap + first, then type it (e.g. 1.2).</span></div>
+      <div class="field" style="justify-content:flex-end"><span class="note">Plus handicap? Tap \u2212 to switch it to +.</span></div>
     </div>
     <div style="display:flex;gap:10px">
       ${onCancel && html`<button type="button" class="btn ghost" onClick=${onCancel}>Cancel</button>`}
@@ -847,7 +848,7 @@ function ScanReview({ result, players, par, notes, allowNew = false, maxPlayers 
             <div class="field"><label>Handicap index</label><${IndexInput} value=${r.newIndex} onChange=${(v) => setRow(i, { newIndex: v })} /></div>
           </div>`}
         </div>`)}
-        ${!newOk && html`<div class="note neg">New players need a name and a handicap index. For a plus handicap, tap + beside the number.</div>`}
+        ${!newOk && html`<div class="note neg">New players need a name and a handicap index. For a plus handicap, tap \u2212 beside the number to switch it to +.</div>`}
         ${tooMany && html`<div class="note neg">A round can have up to ${maxPlayers} players. Skip the rows that weren't in your game.</div>`}
       </div>
       <div class="sc-wrap"><table class="sc scan-grid">
