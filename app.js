@@ -956,18 +956,16 @@ function Setup({ state, dispatch, go, user }) {
   const courses = allCourses(state);
   const [courseId, setCourseId] = useState(courses[0]?.id);
   const [teeId, setTeeId] = useState(courses[0]?.lastTee);
-  const [wheel, setWheel] = useState([]);
-  const [game, setGame] = useState(N.defaultGame);
-  const [teams, setTeams] = useState({});
-  const [scoring, setScoring] = useState('bestball');
-  const [custom, setCustom] = useState([]);
-  const [customDraft, setCustomDraft] = useState(null); // the custom match being built, before "Add"
+  // Each Nassau keeps its own settings and matches. The first becomes round.game; the rest
+  // are saved as side games. customDraft is the custom match being built, before "Add".
+  const newNassau = (format) => ({ id: uid('ns-'), game: { ...N.defaultGame(), format }, teams: {}, wheel: [], scoring: 'bestball', custom: [], customDraft: null });
+  const [nassaus, setNassaus] = useState(() => [newNassau('teams')]);
+  const setN = (id, patch) => setNassaus((ns) => ns.map((n) => (n.id === id ? { ...n, ...patch } : n)));
 
   const [adding, setAdding] = useState(false);
   const [addingCourse, setAddingCourse] = useState(false);
   const [scan, setScan] = useState(null); // scorecard result awaiting review
-  const [nassauOn, setNassauOn] = useState(true);
-  const [openGame, setOpenGame] = useState('nassau'); // which game's settings are showing
+  const [openGame, setOpenGame] = useState(() => nassaus[0].id); // which game's settings are showing
   const [sideGames, setSideGames] = useState([]); // 9 Point games, each with its own 3 players
   // Once a reviewed scorecard is applied, the round's players are exactly the card's, in card order:
   // { rows: [{ nameOnCard, playerId, scores }], notes, courseName }
@@ -983,31 +981,39 @@ function Setup({ state, dispatch, go, user }) {
     else if (ids.length < MAX_PLAYERS) setIds([...ids, id]);
   };
 
-  // Default format + teams follow the group size.
+  // Default teams and format follow the group size (for the first Nassau; extra ones stay Custom).
+  const groupFormat = (n) => (n === 4 || n === 2 ? 'teams' : n === 5 ? 'wheel' : 'roundrobin');
+  const defaultTeams = () => Object.fromEntries(ids.map((id, i) => [id, ids.length === 4 ? (i === 0 || i === 3 ? 'a' : 'b') : i % 2 === 0 ? 'a' : 'b']));
   useEffect(() => {
-    const t = {};
-    ids.forEach((id, i) => { t[id] = ids.length === 4 ? (i === 0 || i === 3 ? 'a' : 'b') : i % 2 === 0 ? 'a' : 'b'; });
-    setTeams(t);
-    setGame((g) => ({ ...g, format: ids.length === 4 || ids.length === 2 ? 'teams' : ids.length === 5 ? 'wheel' : 'roundrobin' }));
-    setWheel(ids.slice(0, 2));
-    setCustom([]);
+    setNassaus((ns) => ns.map((n, i) => ({
+      ...n, teams: defaultTeams(), wheel: ids.slice(0, 2), custom: [], customDraft: null,
+      game: i === 0 ? { ...n.game, format: groupFormat(ids.length) } : n.game,
+    })));
     setSideGames((gs) => gs.map((g) => ({ ...g, players: g.players.filter((id) => ids.includes(id)) })));
   }, [ids.join()]);
 
-  const allCustom = customDraft ? [...custom, customDraft] : custom;
-  const matches = useMemo(() => N.buildMatches(game.format, ids, teams, scoring, allCustom, wheel), [game.format, ids, teams, scoring, custom, customDraft, wheel]);
-  const draftRound = course && { course, players: selected, scores: {}, game: { ...game, matches }, sideGames };
+  const nassauMatches = useMemo(() => nassaus.map((n) =>
+    N.buildMatches(n.game.format, ids, n.teams, n.scoring, n.customDraft ? [...n.custom, n.customDraft] : n.custom, n.wheel)), [nassaus, ids.join()]);
+  const matchCount = nassauMatches.reduce((t, m) => t + m.length, 0);
+  const draftRound = course && { course, players: selected, scores: {}, game: { ...(nassaus[0]?.game ?? N.defaultGame()), matches: nassauMatches[0] ?? [] }, sideGames };
   const sideOk = sideGames.every((g) => g.players.length === 3 && g.players.every((id) => ids.includes(id)));
-  const gamesOk = (nassauOn ? matches.length > 0 : sideGames.length > 0) && sideOk;
+  const gamesOk = nassaus.length + sideGames.length > 0 && nassauMatches.every((m) => m.length > 0) && sideOk;
 
   const canNext = [ids.length >= 2, !!course, gamesOk][step];
   const next = () => {
     if (step < 2) { setStep(step + 1); window.scrollTo(0, 0); return; }
     const scores = {};
     for (const id of ids) scores[id] = [...(card?.rows.find((r) => r.playerId === id)?.scores ?? Array(18).fill(null))];
+    // First Nassau -> round.game; the rest -> side games, with match ids prefixed by the game id.
+    const [first, ...more] = nassaus.map((n, i) => ({ n, matches: nassauMatches[i] }));
     const round = {
       id: uid('r-'), createdAt: Date.now(), course, players: selected.map((p) => ({ ...p })), scores,
-      game: { ...game, teams, wheel, matches: nassauOn ? matches : [] }, sideGames, presses: [], hole: 0, status: 'live',
+      game: first ? { ...first.n.game, teams: first.n.teams, wheel: first.n.wheel, matches: first.matches } : { ...N.defaultGame(), matches: [] },
+      sideGames: [
+        ...more.map(({ n, matches }) => ({ ...n.game, type: 'nassau', id: n.id, teams: n.teams, wheel: n.wheel, matches: matches.map((m) => ({ ...m, id: `${n.id}:${m.id}` })) })),
+        ...sideGames,
+      ],
+      presses: [], hole: 0, status: 'live',
     };
     if (isUnsavedBuiltIn(state, baseCourse)) {
       const saved = adoptBuiltIn({ ...baseCourse, lastTee: course.teeId });
@@ -1125,13 +1131,16 @@ function Setup({ state, dispatch, go, user }) {
 
       ${step === 2 && draftRound && html`
         <div class="section">
-          <div class="section-head"><h2>Games in this round</h2><span class="meta">${(nassauOn ? 1 : 0) + sideGames.length || 'none yet'}</span></div>
-          ${nassauOn && html`<${GameCard} title="Nassau" summary=${nassauSummary(game, matches)} problem=${!matches.length && 'Set up the sides'}
-            open=${openGame === 'nassau'} onToggle=${() => setOpenGame(openGame === 'nassau' ? null : 'nassau')}
-            onRemove=${() => { setNassauOn(false); setOpenGame(null); }}>
-            <${GameSetup} round=${draftRound} game=${game} setGame=${setGame} ids=${ids} players=${selected}
-              teams=${teams} setTeams=${setTeams} wheel=${wheel} setWheel=${setWheel} scoring=${scoring} setScoring=${setScoring} custom=${custom} setCustom=${setCustom} setCustomDraft=${setCustomDraft} matches=${matches} />
-          </${GameCard}>`}
+          <div class="section-head"><h2>Games in this round</h2><span class="meta">${nassaus.length + sideGames.length || 'none yet'}</span></div>
+          ${nassaus.map((n, i) => html`<${GameCard} title=${nassaus.length > 1 ? `Nassau ${i + 1}` : 'Nassau'}
+            summary=${nassauSummary(n.game, nassauMatches[i])} problem=${!nassauMatches[i].length && 'Set up the sides'}
+            open=${openGame === n.id} onToggle=${() => setOpenGame(openGame === n.id ? null : n.id)}
+            onRemove=${() => { setNassaus(nassaus.filter((x) => x.id !== n.id)); setOpenGame(null); }}>
+            <${GameSetup} round=${{ ...draftRound, game: { ...n.game, matches: nassauMatches[i] } }} game=${n.game} setGame=${(g) => setN(n.id, { game: g })}
+              ids=${ids} players=${selected} teams=${n.teams} setTeams=${(t) => setN(n.id, { teams: t })} wheel=${n.wheel} setWheel=${(w) => setN(n.id, { wheel: w })}
+              scoring=${n.scoring} setScoring=${(v) => setN(n.id, { scoring: v })} custom=${n.custom} setCustom=${(c) => setN(n.id, { custom: c })}
+              customDraft=${n.customDraft} setCustomDraft=${(d) => setN(n.id, { customDraft: d })} matches=${nassauMatches[i]} />
+          </${GameCard}>`)}
           ${sideGames.map((g, i) => html`<${GameCard} title=${sideGames.length > 1 ? `9 Point ${i + 1}` : '9 Point'}
             summary=${`${g.players.map((id) => first(selected.find((p) => p.id === id)?.name ?? '?')).join(', ')} · ${NP.ninePointSummary(g)}`}
             problem=${g.players.length !== 3 && `Pick 3 players (${g.players.length} picked)`}
@@ -1139,14 +1148,17 @@ function Setup({ state, dispatch, go, user }) {
             onRemove=${() => { setSideGames(sideGames.filter((x) => x.id !== g.id)); setOpenGame(null); }}>
             <${NinePointSetup} round=${draftRound} g=${g} players=${selected} onChange=${(v) => setSideGames(sideGames.map((x) => (x.id === g.id ? v : x)))} />
           </${GameCard}>`)}
-          ${!nassauOn && !sideGames.length && html`<div class="card empty-state">No games yet. Add one below.</div>`}
+          ${!nassaus.length && !sideGames.length && html`<div class="card empty-state">No games yet. Add one below.</div>`}
         </div>
         <div class="section">
           <div class="section-head"><h2>Add a game</h2></div>
           <div class="add-games">
-            <button type="button" class="add-game" disabled=${nassauOn} onClick=${() => { setNassauOn(true); setOpenGame('nassau'); }}>
-              <span class="plus">${nassauOn ? I.check : I.plus}</span><b>Nassau</b>
-              <small>${nassauOn ? 'Added' : 'Front 9, back 9 and the 18, with presses'}</small>
+            <button type="button" class="add-game" onClick=${() => {
+              const n = { ...newNassau(nassaus.length ? 'custom' : groupFormat(ids.length)), teams: defaultTeams(), wheel: ids.slice(0, 2) };
+              setNassaus([...nassaus, n]); setOpenGame(n.id);
+            }}>
+              <span class="plus">${I.plus}</span><b>Nassau</b>
+              <small>${nassaus.length ? 'Another one, with its own matches and stakes' : 'Front 9, back 9 and the 18, with presses'}</small>
             </button>
             <button type="button" class="add-game" disabled=${ids.length < 3} onClick=${() => { const g = NP.defaultNinePoint(ids.length === 3 ? ids : []); setSideGames([...sideGames, g]); setOpenGame(g.id); }}>
               <span class="plus">${I.plus}</span><b>9 Point</b>
@@ -1157,7 +1169,7 @@ function Setup({ state, dispatch, go, user }) {
       `}
     </main>
     <div class="dock"><div class="dock-inner">
-      <span class="hint">${step === 0 ? `${ids.length} of ${MAX_PLAYERS} selected` : step === 1 ? course?.name ?? 'Pick a course' : [nassauOn && `${matches.length} Nassau ${matches.length === 1 ? 'match' : 'matches'}`, sideGames.length && `${sideGames.length} × 9 Point`].filter(Boolean).join(' + ') || 'No games'}</span>
+      <span class="hint">${step === 0 ? `${ids.length} of ${MAX_PLAYERS} selected` : step === 1 ? course?.name ?? 'Pick a course' : [nassaus.length && `${matchCount} Nassau ${matchCount === 1 ? 'match' : 'matches'}`, sideGames.length && `${sideGames.length} × 9 Point`].filter(Boolean).join(' + ') || 'No games'}</span>
       <button type="button" class="btn primary" disabled=${!canNext} onClick=${next}>${step === 2 ? html`${I.flag} Tee off` : html`Next ${I.arrow}`}</button>
     </div></div>
   </div>`;
@@ -1174,10 +1186,11 @@ function SideToggle({ value, onChange, allowOut }) {
  * Builds one custom match. The match being built already counts (onDraft), so a single
  * match needs no extra tap; "Add match" saves it and starts another.
  */
-function CustomMatchBuilder({ players, onAdd, onDraft, hasOthers }) {
-  const [sides, setSides] = useState({});
-  const [sc, setSc] = useState('bestball');
-  const [draftId, setDraftId] = useState(() => uid('m-'));
+function CustomMatchBuilder({ players, onAdd, onDraft, hasOthers, draft }) {
+  // Pick up where we left off if the card was collapsed with a match half-built.
+  const [sides, setSides] = useState(() => (draft ? Object.fromEntries([...draft.a.map((id) => [id, 'a']), ...draft.b.map((id) => [id, 'b'])]) : {}));
+  const [sc, setSc] = useState(draft?.scoring ?? 'bestball');
+  const [draftId, setDraftId] = useState(() => draft?.id ?? uid('m-'));
   const a = players.filter((p) => sides[p.id] === 'a').map((p) => p.id);
   const b = players.filter((p) => sides[p.id] === 'b').map((p) => p.id);
   const ready = a.length > 0 && b.length > 0;
@@ -1271,7 +1284,7 @@ function NinePointSetup({ round, g, players, onChange, onRemove }) {
   </div>`;
 }
 
-function GameSetup({ round, game, setGame, ids, players, teams, setTeams, wheel, setWheel, scoring, setScoring, custom, setCustom, setCustomDraft, matches }) {
+function GameSetup({ round, game, setGame, ids, players, teams, setTeams, wheel, setWheel, scoring, setScoring, custom, setCustom, customDraft, setCustomDraft, matches }) {
   const upd = (patch) => setGame({ ...game, ...patch });
   const st = game.stakes;
   const same = st.front === st.back && st.back === st.overall;
@@ -1337,7 +1350,7 @@ function GameSetup({ round, game, setGame, ids, players, teams, setTeams, wheel,
           <span class="note">${m.a.length + m.b.length > 2 ? (m.scoring === 'aggregate' ? 'Agg' : 'Best ball') : ''}</span>
           <button type="button" class="x-btn" aria-label="Remove match" onClick=${() => setCustom(custom.filter((x) => x.id !== m.id))}>${I.x}</button>
         </div>`)}</div>`}
-        <${CustomMatchBuilder} players=${players} hasOthers=${custom.length > 0} onDraft=${setCustomDraft} onAdd=${(m) => { setCustomDraft(null); setCustom([...custom, m]); }} />
+        <${CustomMatchBuilder} players=${players} hasOthers=${custom.length > 0} draft=${customDraft} onDraft=${setCustomDraft} onAdd=${(m) => { setCustomDraft(null); setCustom([...custom, m]); }} />
       `}
     </div>
 
@@ -1461,6 +1474,11 @@ function BetLine({ b, round, match }) {
   </div>`;
 }
 
+/** "Nassau", or "Nassau 2" when a round has several. */
+const nassauTitle = (data, i) => (data.nassaus.length > 1 ? `Nassau ${i + 1}` : 'Nassau');
+/** "$10" or "$10-5-10": the Nassau's front-back-overall stakes. */
+const nassauStakes = (g) => (g.stakes.front === g.stakes.back && g.stakes.back === g.stakes.overall ? `$${g.stakes.front}` : `$${g.stakes.front}-${g.stakes.back}-${g.stakes.overall}`);
+
 function MatchCard({ round, c, dispatch, compact }) {
   const m = c.match;
   return html`<div class="card match">
@@ -1539,10 +1557,10 @@ function ScoreTab({ round, data, dispatch, toast, onSettle }) {
 
     <${DayTotal} round=${round} data=${data} />
 
-    ${data.matches.length > 0 && html`<div class="section">
-      <div class="section-head"><h2>Nassau</h2><span class="meta">${round.game.autoPress.enabled ? `${round.game.autoPress.down}-down autos` : 'No auto presses'}</span></div>
-      ${data.matches.map((c) => html`<${MatchCard} round=${round} c=${c} dispatch=${dispatch} compact />`)}
-    </div>`}
+    ${data.nassaus.map((n, i) => html`<div class="section">
+      <div class="section-head"><h2>${nassauTitle(data, i)}</h2><span class="meta">${nassauStakes(n.game)} · ${n.game.autoPress.enabled ? `${n.game.autoPress.down}-down autos` : 'no auto presses'}</span></div>
+      ${n.matches.map((c) => html`<${MatchCard} round=${c.view} c=${c} dispatch=${dispatch} compact />`)}
+    </div>`)}
     ${data.side.map((r) => html`<${NinePointCard} round=${round} r=${r} hole=${h} />`)}
 
     <div class="fab-row"><div class="dock-inner">
@@ -1690,7 +1708,10 @@ function BetsTab({ round, data, dispatch }) {
     <${DayTotal} round=${round} data=${data} />
     ${data.matches.map((c) => {
       const m = c.match;
+      const rv = c.view;
+      const ni = data.nassaus.findIndex((n) => n.id === c.gameId);
       return html`<div class="section">
+        ${data.nassaus.length > 1 && html`<div class="section-head"><h2>${nassauTitle(data, ni)}</h2><span class="meta">${nassauStakes(rv.game)}</span></div>`}
         <div class="card match">
           <div class="match-head" style="flex-wrap:wrap"><span class="sa">${sideNames(round, m.a)}</span><span class="vs">vs</span><span class="sb">${sideNames(round, m.b)}</span></div>
           <div class="chips">
@@ -1698,9 +1719,9 @@ function BetsTab({ round, data, dispatch }) {
             ${[...m.a, ...m.b].length > 2 && html`<span class="strokes-chip">${m.scoring === 'aggregate' ? 'Aggregate' : 'Best ball'}</span>`}
           </div>
           ${c.segments.map((s) => {
-            const opt = N.pressOption(round, c, s.key);
+            const opt = N.pressOption(rv, c, s.key);
             return html`<div>
-              <div class="section-head" style="margin-top:4px"><h2>${s.label} · $${round.game.stakes[s.key]}</h2>
+              <div class="section-head" style="margin-top:4px"><h2>${s.label} · $${rv.game.stakes[s.key]}</h2>
                 ${opt && html`<button type="button" class="press-btn" style="margin:0" onClick=${() => dispatch({ type: 'addPress', roundId: round.id, press: { id: uid('pr-'), matchId: m.id, segment: s.key, start: opt.start, by: opt.side } })}>${I.flag} ${sideNames(round, m[opt.side]).split(' & ').map((x) => x).join(' & ')} press</button>`}
               </div>
               ${s.bets.map((b) => html`<div class="bet">

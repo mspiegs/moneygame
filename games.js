@@ -1,36 +1,60 @@
-// Every game in a round, added up. A round has one Nassau (round.game; it may
-// have no matches) plus any number of side games (round.sideGames), currently
-// 9 Point. Pure functions: used by the app, the server ledger and the Money tab.
+// Every game in a round, added up. A round's first Nassau lives in round.game
+// (it may have no matches); more Nassaus, each with its own settings, and 9 Point
+// games live in round.sideGames ({ type: 'nassau' | 'ninepoint', ... }).
+// Extra Nassaus' match ids are prefixed with the game id, so presses (which point
+// at a match id) never collide across Nassaus.
+// Pure functions: used by the app, the server ledger and the Money tab.
 
 import * as N from './nassau.js';
 import { computeNinePoint } from './ninepoint.js';
 
 export const sideGamesOf = (round) => round.sideGames || [];
-export const hasNassau = (round) => (round.game?.matches?.length ?? 0) > 0;
+
+/**
+ * Every Nassau in the round with matches: [{ id, game, view }], where `view` is the
+ * round as that Nassau's engine sees it ({ ...round, game }).
+ */
+export function nassausOf(round) {
+  const out = [];
+  if (round.game?.matches?.length) out.push({ id: 'nassau', game: round.game, view: round });
+  for (const g of sideGamesOf(round)) if (g.type === 'nassau' && g.matches?.length) out.push({ id: g.id, game: g, view: { ...round, game: g } });
+  return out;
+}
+export const hasNassau = (round) => nassausOf(round).length > 0;
 
 const round2 = (v) => Math.round(v * 100) / 100;
 
 /** Results for each side game, in order. */
 export function sideResults(round) {
-  return sideGamesOf(round).map((g) => (g.type === 'ninepoint' ? computeNinePoint(round, g) : null)).filter(Boolean);
+  return sideGamesOf(round).filter((g) => g.type === 'ninepoint').map((g) => computeNinePoint(round, g));
 }
 
 /**
- * The Nassau's settleRound result, with settled/projected widened to include every
- * side game. 9 Point money accrues hole by hole, so it's the same in both.
- * Extra field: side = sideResults(round).
+ * Money from every game. Shape matches nassau.js's settleRound so screens can use it as before:
+ *   settled / projected: { playerId: $ } across all games (9 Point money accrues hole by hole,
+ *                        so it's the same in both)
+ *   matches: every Nassau's computed matches, each with `view` (that Nassau's round view,
+ *            for its stakes and press rules) and `gameId`
+ *   nassaus: [{ id, game, view, matches }]; side: 9 Point results
  */
 export function settleAll(round) {
-  const nassau = N.settleRound(round);
   const side = sideResults(round);
-  const settled = { ...nassau.settled };
-  const projected = { ...nassau.projected };
+  const settled = Object.fromEntries(round.players.map((p) => [p.id, 0]));
+  const projected = { ...settled };
+  const nassaus = nassausOf(round).map((n) => {
+    const r = N.settleRound(n.view);
+    for (const id in settled) {
+      settled[id] = round2(settled[id] + (r.settled[id] || 0));
+      projected[id] = round2(projected[id] + (r.projected[id] || 0));
+    }
+    return { ...n, matches: r.matches.map((c) => ({ ...c, view: n.view, gameId: n.id })) };
+  });
   for (const r of side)
     for (const [id, v] of Object.entries(r.money)) {
       settled[id] = round2((settled[id] || 0) + v);
       projected[id] = round2((projected[id] || 0) + v);
     }
-  return { ...nassau, settled, projected, nassauSettled: nassau.settled, nassauProjected: nassau.projected, side };
+  return { settled, projected, matches: nassaus.flatMap((n) => n.matches), nassaus, side };
 }
 
 /** Who won what from whom across all games, netted per pair: [{ winner, loser, amount }]. */
@@ -40,7 +64,7 @@ export function pairwiseAll(round, { projected = false } = {}) {
     const key = winner < loser ? `${winner}|${loser}` : `${loser}|${winner}`;
     net.set(key, (net.get(key) || 0) + (winner < loser ? amount : -amount));
   };
-  N.pairwiseRound(round, { projected }).forEach(add);
+  for (const n of nassausOf(round)) N.pairwiseRound(n.view, { projected }).forEach(add);
   for (const r of sideResults(round)) r.pairwise.forEach(add);
   const out = [];
   for (const [key, v] of net) {
@@ -54,11 +78,13 @@ export function pairwiseAll(round, { projected = false } = {}) {
 /** Short description of the round's games, e.g. "10-10-10 Nassau + 9 Point". */
 export function gamesLabel(round) {
   const parts = [];
-  if (hasNassau(round)) parts.push(`${N.SEGMENT_KEYS.map((k) => round.game.stakes[k]).join('-')} Nassau`);
+  const ns = nassausOf(round);
+  if (ns.length === 1) parts.push(`${N.SEGMENT_KEYS.map((k) => ns[0].game.stakes[k]).join('-')} Nassau`);
+  else if (ns.length > 1) parts.push(`${ns.length} Nassaus`);
   const nines = sideGamesOf(round).filter((g) => g.type === 'ninepoint').length;
   if (nines) parts.push(nines > 1 ? `${nines}× 9 Point` : '9 Point');
   return parts.join(' + ') || 'No games';
 }
 
 /** Number of things being played for: Nassau matches plus side games. */
-export const gameCount = (round) => (round.game?.matches?.length ?? 0) + sideGamesOf(round).length;
+export const gameCount = (round) => nassausOf(round).reduce((t, n) => t + n.game.matches.length, 0) + sideGamesOf(round).filter((g) => g.type === 'ninepoint').length;

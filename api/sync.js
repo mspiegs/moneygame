@@ -97,9 +97,18 @@ const handlers = {
     const sideGames = Array.isArray(r.sideGames) ? r.sideGames : [];
     if (sideGames.length > 8) bad('at most 8 side games');
     for (const g of sideGames) {
-      if (g?.type !== 'ninepoint') bad(`unknown game ${g?.type}`);
-      if (!Array.isArray(g.players) || g.players.length !== 3 || g.players.some((p) => !ids.includes(p))) bad('9 Point needs 3 of the round\u2019s players');
-      if (!(Number.isFinite(g.stake) && g.stake >= 0 && g.stake <= 10000)) bad('9 Point stake must be 0-10,000');
+      if (g?.type === 'ninepoint') {
+        if (!Array.isArray(g.players) || g.players.length !== 3 || g.players.some((p) => !ids.includes(p))) bad('9 Point needs 3 of the round\u2019s players');
+        if (!(Number.isFinite(g.stake) && g.stake >= 0 && g.stake <= 10000)) bad('9 Point stake must be 0-10,000');
+      } else if (g?.type === 'nassau') {
+        // An extra Nassau with its own settings; match ids are prefixed with the game id.
+        if (!Array.isArray(g.matches) || g.matches.length > 20) bad('Nassau matches missing');
+        for (const m of g.matches) {
+          if (typeof m?.id !== 'string' || !m.id.startsWith(`${g.id}:`)) bad('Nassau match ids must start with the game id');
+          if (![...(m.a || []), ...(m.b || [])].every((p) => ids.includes(p))) bad('Nassau match has a player not in the round');
+        }
+        if (!['front', 'back', 'overall'].every((k) => Number.isFinite(g.stakes?.[k]) && g.stakes[k] >= 0 && g.stakes[k] <= 10000)) bad('Nassau stakes must be 0-10,000');
+      } else bad(`unknown game ${g?.type}`);
     }
     const startedAt = new Date(Number.isFinite(r.createdAt) ? r.createdAt : Date.now()).toISOString();
 
