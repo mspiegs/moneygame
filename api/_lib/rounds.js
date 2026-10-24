@@ -6,11 +6,17 @@ export { num };
 /**
  * Rounds in the client's shape ({ id, course, players, scores, game, presses, ... }).
  * Pass a group id for all of its rounds, or a round id for just that one.
+ * With `visibleTo` (a user id), only rounds that user can see: ones they started, or
+ * ones where one of the players is linked to their account. Everyone else's rounds
+ * in the group stay private to the people in them.
  */
-export async function loadRounds(sql, { groupId, roundId }) {
+export async function loadRounds(sql, { groupId, roundId, visibleTo }) {
+  const v = visibleTo ?? null;
   const [rounds, roundPlayers, scores, presses] = await Promise.all([
-    sql`select id, course_snapshot, game, side_games, status, current_hole, started_at from rounds
-      where deleted_at is null and (group_id = ${groupId ?? null} or id = ${roundId ?? null}) order by started_at desc`,
+    sql`select r.id, r.course_snapshot, r.game, r.side_games, r.status, r.current_hole, r.started_at from rounds r
+      where r.deleted_at is null and (r.group_id = ${groupId ?? null} or r.id = ${roundId ?? null})
+        and (${v}::text is null or r.created_by = ${v} or exists (select 1 from round_players vp join players vpl on vpl.id = vp.player_id where vp.round_id = r.id and vpl.user_id = ${v}))
+      order by r.started_at desc`,
     sql`select rp.round_id, rp.player_id, rp.name, rp.handicap_index, rp.color from round_players rp join rounds r on r.id = rp.round_id
       where r.deleted_at is null and (r.group_id = ${groupId ?? null} or r.id = ${roundId ?? null}) order by rp.seat`,
     sql`select s.round_id, s.player_id, s.hole, s.gross from scores s join rounds r on r.id = s.round_id
@@ -30,8 +36,10 @@ export async function loadRounds(sql, { groupId, roundId }) {
     hole: r.current_hole,
     status: r.status,
   }]));
+  // Rows for rounds this user can't see are skipped, so nothing about them is returned.
   for (const p of roundPlayers) {
     const r = byRound.get(p.round_id);
+    if (!r) continue;
     r.players.push({ id: p.player_id, name: p.name, index: num(p.handicap_index), color: p.color });
     r.scores[p.player_id] = Array(18).fill(null);
   }
@@ -40,7 +48,7 @@ export async function loadRounds(sql, { groupId, roundId }) {
     if (row) row[s.hole] = s.gross;
   }
   for (const p of presses) {
-    byRound.get(p.round_id).presses.push({ id: p.id, matchId: p.match_id, segment: p.segment, start: p.start_hole, by: p.by_side });
+    byRound.get(p.round_id)?.presses.push({ id: p.id, matchId: p.match_id, segment: p.segment, start: p.start_hole, by: p.by_side });
   }
   return [...byRound.values()];
 }
@@ -49,6 +57,13 @@ export async function loadRounds(sql, { groupId, roundId }) {
  * Rewrites a round's ledger rows: the pairwise money from its finished bets in every game
  * when the round is final, nothing otherwise (live, reopened or deleted).
  */
+/** Can this user see (and so change) this round? They started it, or they're one of its players. */
+export async function canSeeRound(sql, roundId, userId) {
+  const [r] = await sql`select 1 from rounds r where r.id = ${roundId} and (r.created_by = ${userId}
+    or exists (select 1 from round_players vp join players vpl on vpl.id = vp.player_id where vp.round_id = r.id and vpl.user_id = ${userId}))`;
+  return !!r;
+}
+
 export async function refreshLedger(sql, roundId) {
   const [r] = await sql`select status, deleted_at from rounds where id = ${roundId}`;
   if (!r || r.status !== 'final' || r.deleted_at) {

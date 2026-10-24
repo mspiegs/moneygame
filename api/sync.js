@@ -1,7 +1,7 @@
 import { authed } from './_lib/auth.js';
 import { db, handle, HttpError, json } from './_lib/db.js';
 import { resolveGroup } from './_lib/groups.js';
-import { refreshLedger } from './_lib/rounds.js';
+import { canSeeRound, refreshLedger } from './_lib/rounds.js';
 
 // POST /api/sync { group?, ops: [{ type, ... }] }
 //
@@ -33,11 +33,13 @@ async function assertOwned(sql, table, id, groupId) {
 }
 
 async function requireRound(sql, roundId, groupId, ctx) {
-  if (ctx?.checked.has(roundId)) return; // already checked earlier in this batch
+  if (ctx.checked.has(roundId)) return; // already checked earlier in this batch
   const [r] = await sql`select group_id from rounds where id = ${str(roundId, 'roundId')}`;
   if (!r) throw new HttpError(404, `Round ${roundId} not found`);
   if (r.group_id !== groupId) throw new HttpError(403, 'Round belongs to another group');
-  ctx?.checked.add(roundId);
+  // Rounds are private to the people in them (and whoever started them), even within a group.
+  if (!(await canSeeRound(sql, roundId, ctx.user.id))) throw new HttpError(403, 'Only players in this round can change it');
+  ctx.checked.add(roundId);
 }
 
 const handlers = {
@@ -85,7 +87,7 @@ const handlers = {
   /** Creates or fully replaces a round, including its scores and presses (used on create and import). */
   async 'round.put'(sql, g, user, { round: r }, ctx) {
     const id = str(r?.id, 'round.id');
-    await assertOwned(sql, 'rounds', id, g);
+    if (await assertOwned(sql, 'rounds', id, g)) await requireRound(sql, id, g, ctx);
     const players = Array.isArray(r.players) && r.players.length ? r.players : bad('round needs players');
     const ids = players.map((p) => str(p.id, 'player.id'));
     // Players removed from the roster (or never synced, like samples) still need a row for history.
@@ -158,12 +160,14 @@ const handlers = {
     ctx.touched.add(roundId);
   },
 
-  async 'round.hole'(sql, g, user, { roundId, hole }) {
+  async 'round.hole'(sql, g, user, { roundId, hole }, ctx) {
+    await requireRound(sql, roundId, g, ctx);
     await sql`update rounds set current_hole = ${int(hole, 'hole', 0, 17)}, updated_at = now()
       where id = ${str(roundId, 'roundId')} and group_id = ${g}`;
   },
 
   async 'round.status'(sql, g, user, { roundId, status }, ctx) {
+    await requireRound(sql, roundId, g, ctx);
     if (status !== 'live' && status !== 'final') bad('status must be live or final');
     await sql`update rounds set status = ${status}, updated_at = now(),
         finished_at = case when ${status} = 'final' then coalesce(finished_at, now()) else null end
@@ -243,7 +247,7 @@ export const POST = authed(handle(async (request, user) => {
 
   // Per batch: rounds already checked for access, and rounds whose money needs re-freezing.
   // The ledger is refreshed once per round at the end, not after every score tap.
-  const ctx = { checked: new Set(), touched: new Set() };
+  const ctx = { user, checked: new Set(), touched: new Set() };
   const refreshTouched = async () => { for (const id of ctx.touched) await refreshLedger(sql, id); };
 
   const rejected = [];

@@ -18,10 +18,16 @@ export const GET = authed(handle(async (request, user) => {
           filter (where t.id is not null), '[]') as tee_sets
       from courses c left join tee_sets t on t.course_id = c.id
       where c.group_id = ${group.id} and c.archived_at is null group by c.id order by c.created_at`,
-    loadRounds(sql, { groupId: group.id }),
+    // Only rounds this user played in or started; the group's other rounds stay with the people in them.
+    loadRounds(sql, { groupId: group.id, visibleTo: user.id }),
     sql`select l.round_id, l.winner_id, l.loser_id, l.amount from ledger_entries l join rounds r on r.id = l.round_id
-      where r.group_id = ${group.id} and r.deleted_at is null`,
-    sql`select id, from_id, to_id, amount, note, paid_at, round_id from payments where group_id = ${group.id} order by paid_at desc`,
+      where r.group_id = ${group.id} and r.deleted_at is null
+        and (r.created_by = ${user.id} or exists (select 1 from round_players vp join players vpl on vpl.id = vp.player_id where vp.round_id = r.id and vpl.user_id = ${user.id}))`,
+    // Only payments this user is part of (or recorded).
+    sql`select p.id, p.from_id, p.to_id, p.amount, p.note, p.paid_at, p.round_id from payments p
+      where p.group_id = ${group.id} and (p.recorded_by = ${user.id}
+        or exists (select 1 from players pl where pl.id in (p.from_id, p.to_id) and pl.user_id = ${user.id}))
+      order by p.paid_at desc`,
   ]);
 
   return json({
