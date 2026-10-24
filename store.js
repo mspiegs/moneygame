@@ -24,6 +24,13 @@ function write(key, value) {
 }
 
 const isSample = (x) => !!x?.sample;
+
+/** Ops where only the latest value matters share a key; a newer one replaces an older one still queued. */
+function opKey(op) {
+  if (op.type === 'score.set') return `score|${op.roundId}|${op.pid}|${op.hole}`;
+  if (op.type === 'round.hole') return `hole|${op.roundId}`;
+  return null;
+}
 const hasData = (s) => s.players.length || s.courses.length || s.rounds.length;
 
 /** Server ops for a reducer action, given the state before it. Samples never leave the device. */
@@ -90,6 +97,7 @@ export class Sync {
     this.version = 0; // bumps on every local change
     this.offline = false;
     this.flushing = null;
+    this.inflight = 0; // ops at the front of the outbox that are being sent right now
     this.retry = null;
     this.listeners = new Set();
 
@@ -112,6 +120,10 @@ export class Sync {
   }
   emit() {
     const st = this.status();
+    // The pending count only shows while offline; don't redraw the app for it otherwise.
+    const sig = JSON.stringify([st.offline, st.group, st.groupName, st.offline ? st.pending : 0]);
+    if (sig === this.lastSig) return;
+    this.lastSig = sig;
     for (const fn of this.listeners) fn(st);
   }
   persist() {
@@ -135,8 +147,17 @@ export class Sync {
     this.state = state;
     if (ops.length) {
       this.version++;
-      // Each op remembers its group, so switching groups can't send it to the wrong one.
-      this.outbox.push(...ops.map((op) => ({ ...op, group: this.group })));
+      for (const op of ops) {
+        // A newer value for the same score (or current hole) replaces one still waiting to go up,
+        // so tapping + three times sends one change, not three. Ops already being sent are left alone.
+        const key = opKey(op);
+        if (key) {
+          const i = this.outbox.findIndex((o, j) => j >= this.inflight && opKey(o) === key);
+          if (i >= 0) this.outbox.splice(i, 1);
+        }
+        // Each op remembers its group, so switching groups can't send it to the wrong one.
+        this.outbox.push({ ...op, group: this.group });
+      }
     }
     this.persist();
     if (ops.length) {
@@ -158,10 +179,12 @@ export class Sync {
       let n = 0;
       while (n < Math.min(BATCH, this.outbox.length) && (this.outbox[n].group ?? null) === group) n++;
       const batch = this.outbox.slice(0, n);
+      this.inflight = n;
       let res;
       try {
         res = await api('sync', { method: 'POST', body: { group, ops: batch } });
       } catch (e) {
+        this.inflight = 0;
         // Offline, or the server stopped partway: keep everything and try again later.
         // Signed out: keep the queue for when this user signs back in, but stop retrying.
         this.offline = e instanceof TypeError;
@@ -172,6 +195,7 @@ export class Sync {
       if (res.rejected?.length) console.warn('Dormie: server rejected changes', res.rejected);
       if (!this.group && res.group) ({ id: this.group, name: this.groupName } = res.group);
       this.outbox.splice(0, res.done);
+      this.inflight = 0;
       this.offline = false;
       this.persist();
       this.emit();

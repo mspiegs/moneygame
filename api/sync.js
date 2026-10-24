@@ -32,10 +32,12 @@ async function assertOwned(sql, table, id, groupId) {
   return !!rows[0];
 }
 
-async function requireRound(sql, roundId, groupId) {
+async function requireRound(sql, roundId, groupId, ctx) {
+  if (ctx?.checked.has(roundId)) return; // already checked earlier in this batch
   const [r] = await sql`select group_id from rounds where id = ${str(roundId, 'roundId')}`;
   if (!r) throw new HttpError(404, `Round ${roundId} not found`);
   if (r.group_id !== groupId) throw new HttpError(403, 'Round belongs to another group');
+  ctx?.checked.add(roundId);
 }
 
 const handlers = {
@@ -81,7 +83,7 @@ const handlers = {
   },
 
   /** Creates or fully replaces a round, including its scores and presses (used on create and import). */
-  async 'round.put'(sql, g, user, { round: r }) {
+  async 'round.put'(sql, g, user, { round: r }, ctx) {
     const id = str(r?.id, 'round.id');
     await assertOwned(sql, 'rounds', id, g);
     const players = Array.isArray(r.players) && r.players.length ? r.players : bad('round needs players');
@@ -147,13 +149,13 @@ const handlers = {
           ${presses.map((p) => p[3])}::int[], ${presses.map((p) => p[4])}::text[]) as t(pid, mid, seg, start, side)
         on conflict (id) do nothing`,
     ]);
-    await refreshLedger(sql, id);
+    ctx.touched.add(id);
   },
 
-  async 'round.delete'(sql, g, user, { roundId }) {
-    await requireRound(sql, roundId, g);
+  async 'round.delete'(sql, g, user, { roundId }, ctx) {
+    await requireRound(sql, roundId, g, ctx);
     await sql`update rounds set deleted_at = now(), updated_at = now() where id = ${roundId}`;
-    await refreshLedger(sql, roundId);
+    ctx.touched.add(roundId);
   },
 
   async 'round.hole'(sql, g, user, { roundId, hole }) {
@@ -161,16 +163,16 @@ const handlers = {
       where id = ${str(roundId, 'roundId')} and group_id = ${g}`;
   },
 
-  async 'round.status'(sql, g, user, { roundId, status }) {
+  async 'round.status'(sql, g, user, { roundId, status }, ctx) {
     if (status !== 'live' && status !== 'final') bad('status must be live or final');
     await sql`update rounds set status = ${status}, updated_at = now(),
         finished_at = case when ${status} = 'final' then coalesce(finished_at, now()) else null end
       where id = ${str(roundId, 'roundId')} and group_id = ${g}`;
-    await refreshLedger(sql, roundId);
+    ctx.touched.add(roundId);
   },
 
-  async 'score.set'(sql, g, user, { roundId, pid, hole, value }) {
-    await requireRound(sql, roundId, g);
+  async 'score.set'(sql, g, user, { roundId, pid, hole, value }, ctx) {
+    await requireRound(sql, roundId, g, ctx);
     int(hole, 'hole', 0, 17);
     if (value == null) {
       await sql`delete from scores where round_id = ${roundId} and player_id = ${str(pid, 'pid')} and hole = ${hole}`;
@@ -179,23 +181,23 @@ const handlers = {
         values (${roundId}, ${str(pid, 'pid')}, ${hole}, ${int(value, 'score', 1, 20)}, ${user.id})
         on conflict (round_id, player_id, hole) do update set gross = excluded.gross, updated_by = excluded.updated_by, updated_at = now()`;
     }
-    await refreshLedger(sql, roundId);
+    ctx.touched.add(roundId);
   },
 
-  async 'press.add'(sql, g, user, { roundId, press: p }) {
-    await requireRound(sql, roundId, g);
+  async 'press.add'(sql, g, user, { roundId, press: p }, ctx) {
+    await requireRound(sql, roundId, g, ctx);
     if (!['front', 'back', 'overall'].includes(p?.segment)) bad('press.segment');
     if (p.by !== 'a' && p.by !== 'b') bad('press.by');
     await sql`insert into presses (id, round_id, match_id, segment, start_hole, by_side, created_by)
       values (${str(p.id, 'press.id')}, ${roundId}, ${str(p.matchId, 'press.matchId')}, ${p.segment}, ${int(p.start, 'press.start', 0, 17)}, ${p.by}, ${user.id})
       on conflict (id) do nothing`;
-    await refreshLedger(sql, roundId);
+    ctx.touched.add(roundId);
   },
 
-  async 'press.remove'(sql, g, user, { roundId, pressId }) {
-    await requireRound(sql, roundId, g);
+  async 'press.remove'(sql, g, user, { roundId, pressId }, ctx) {
+    await requireRound(sql, roundId, g, ctx);
     await sql`delete from presses where id = ${str(pressId, 'pressId')} and round_id = ${roundId}`;
-    await refreshLedger(sql, roundId);
+    ctx.touched.add(roundId);
   },
 
   /** "This player is me": links the signed-in user to one player in the group. */
@@ -239,21 +241,28 @@ export const POST = authed(handle(async (request, user) => {
   const sql = db();
   const group = await resolveGroup(sql, user, body.group);
 
+  // Per batch: rounds already checked for access, and rounds whose money needs re-freezing.
+  // The ledger is refreshed once per round at the end, not after every score tap.
+  const ctx = { checked: new Set(), touched: new Set() };
+  const refreshTouched = async () => { for (const id of ctx.touched) await refreshLedger(sql, id); };
+
   const rejected = [];
   let done = 0;
   for (const op of ops) {
     const fn = handlers[op?.type];
     try {
       if (!fn) bad(`Unknown op ${op?.type}`);
-      await fn(sql, group.id, user, op);
+      await fn(sql, group.id, user, op, ctx);
     } catch (e) {
       if (!permanent(e)) {
         console.error('sync stopped at op', done, op?.type, e);
+        await refreshTouched().catch((err) => console.error('ledger refresh failed', err));
         return json({ done, rejected, group, error: 'Server error' }, 500);
       }
       rejected.push({ index: done, type: op?.type, error: e.message });
     }
     done++;
   }
+  await refreshTouched();
   return json({ done, rejected, group });
 }));

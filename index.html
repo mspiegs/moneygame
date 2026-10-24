@@ -61,6 +61,9 @@
 
 * { box-sizing: border-box; }
 html, body { height: 100%; }
+/* Taps are taps: no double-tap-to-zoom, and none of the ~300ms wait iOS adds to every tap while it
+   checks for a second one (that wait is what made quick +/- taps lag). Pinch zoom still works. */
+html, button, a, input, select, label { touch-action: manipulation; }
 body {
   background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 15px; line-height: 1.45;
   -webkit-font-smoothing: antialiased; -webkit-tap-highlight-color: transparent;
