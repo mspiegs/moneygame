@@ -1673,6 +1673,7 @@ function Ribbon({ b, seg }) {
     ${Array.from({ length: n }, (_, i) => {
       const hole = seg.start + i;
       if (hole < b.start) return html`<span class="off" style="opacity:.35"></span>`;
+      if (b.closedAt != null && hole >= b.closedAt) return html`<span class="off" title=${`Hole ${hole + 1}: bet already decided`}>–</span>`;
       const v = b.history[hole - b.start];
       if (v == null) return html`<span class="off">${hole + 1}</span>`;
       return html`<span class=${v > 0 ? 'a' : v < 0 ? 'b' : 'h'} title=${`Hole ${hole + 1}`}>${v === 0 ? '·' : Math.abs(v)}</span>`;

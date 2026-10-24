@@ -119,21 +119,24 @@ function pressesAllowedOn(game, seg) {
 function simulateSegment(round, match, segKey, results, thru) {
   const { game } = round;
   const seg = SEGMENTS[segKey];
-  const bets = [{ id: `${match.id}:${segKey}:main`, kind: 'main', start: seg.start, by: null, score: 0, history: [], triggered: false }];
+  // closedAt: the hole index after the one that decided the bet (e.g. 7 up with 6 to play).
+  // From there the bet is over: its score is frozen and later holes don't count toward it.
+  const bets = [{ id: `${match.id}:${segKey}:main`, kind: 'main', start: seg.start, by: null, score: 0, history: [], triggered: false, closedAt: null }];
 
   const manual = (round.presses || [])
     .filter((p) => p.matchId === match.id && p.segment === segKey && p.start >= seg.start && p.start <= seg.end)
     .sort((x, y) => x.start - y.start);
-  for (const p of manual) bets.push({ id: p.id, kind: 'manual', start: p.start, by: p.by, score: 0, history: [], triggered: false });
+  for (const p of manual) bets.push({ id: p.id, kind: 'manual', start: p.start, by: p.by, score: 0, history: [], triggered: false, closedAt: null });
 
   const capped = () => game.maxPresses > 0 && bets.length - 1 >= game.maxPresses;
   const autoOn = game.autoPress.enabled && pressesAllowedOn(game, segKey);
 
   for (let h = seg.start; h <= seg.end && h < thru; h++) {
     for (const b of bets) {
-      if (b.start > h) continue;
+      if (b.start > h || b.closedAt != null) continue;
       b.score += results[h];
       b.history.push(b.score);
+      if (Math.abs(b.score) > seg.end - h) b.closedAt = h + 1; // up by more than the holes left: closed out
     }
     if (!autoOn) continue;
     // Snapshot so a press created on this hole doesn't trigger on the same hole.
@@ -141,7 +144,7 @@ function simulateSegment(round, match, segKey, results, thru) {
       if (b.triggered || b.start > h) continue;
       if (Math.abs(b.score) >= game.autoPress.down && h + 1 <= seg.end && !capped()) {
         b.triggered = true;
-        bets.push({ id: `${b.id}>auto@${h + 1}`, kind: 'auto', start: h + 1, by: b.score > 0 ? 'b' : 'a', score: 0, history: [], triggered: false });
+        bets.push({ id: `${b.id}>auto@${h + 1}`, kind: 'auto', start: h + 1, by: b.score > 0 ? 'b' : 'a', score: 0, history: [], triggered: false, closedAt: null });
       }
     }
   }
@@ -153,11 +156,11 @@ function simulateSegment(round, match, segKey, results, thru) {
     b.label = b.kind === 'main' ? seg.label : `Press ${++n}`;
     b.segment = segKey;
     b.stake = game.stakes[segKey];
-    const playedTo = Math.min(thru, seg.end + 1); // exclusive
+    const playedTo = b.closedAt ?? Math.min(thru, seg.end + 1); // exclusive
     b.played = Math.max(0, playedTo - b.start);
     b.holesLeft = seg.end + 1 - Math.max(b.start, playedTo);
     b.started = thru > b.start;
-    b.decided = Math.abs(b.score) > b.holesLeft;
+    b.decided = b.closedAt != null;
     b.final = segDone || b.decided;
     b.result = b.final ? sign(b.score) : null;
     b.leader = b.score > 0 ? 'a' : b.score < 0 ? 'b' : null;
