@@ -29,6 +29,7 @@ const isSample = (x) => !!x?.sample;
 function opKey(op) {
   if (op.type === 'score.set') return `score|${op.roundId}|${op.pid}|${op.hole}`;
   if (op.type === 'round.hole') return `hole|${op.roundId}`;
+  if (op.type === 'wolf.pick') return `wolf|${op.roundId}|${op.gameId}|${op.hole}`;
   return null;
 }
 const hasData = (s) => s.players.length || s.courses.length || s.rounds.length;
@@ -62,6 +63,7 @@ export function opsFor(a, s) {
     case 'setHole': return [{ type: 'round.hole', roundId: a.roundId, hole: a.hole }];
     case 'addPress': return [{ type: 'press.add', roundId: a.roundId, press: a.press }];
     case 'removePress': return [{ type: 'press.remove', roundId: a.roundId, pressId: a.pressId }];
+    case 'wolfPick': return [{ type: 'wolf.pick', roundId: a.roundId, gameId: a.gameId, hole: a.hole, pick: a.pick ?? null }];
     case 'setStatus': return [{ type: 'round.status', roundId: a.roundId, status: a.status }];
     case 'claimPlayer': return isSample(s.players.find((p) => p.id === a.id)) ? [] : [{ type: 'player.claim', id: a.id }];
     case 'addPayment': return [{ type: 'payment.add', payment: a.payment }];

@@ -2,6 +2,7 @@
 
 A phone-first app for golf money games, starting with the Nassau.
 
+- Wolf for 3–5 players: partner, lone or blind wolf, carryovers, birdies double, trailing wolf on the last holes
 - Teams (best ball or aggregate; side v side games can also bet the 2nd, 3rd… ball, each its own Nassau), the wheel, everyone-vs-everyone, or custom matches, for 2–8 players
 - Net or gross with allowances, strokes off the low man, low in group, or full
 - Manual presses, N-down auto presses (presses on presses), press limits, pressing the overall

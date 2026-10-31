@@ -104,6 +104,11 @@ const handlers = {
       if (g?.type === 'ninepoint') {
         if (!Array.isArray(g.players) || g.players.length !== 3 || g.players.some((p) => !ids.includes(p))) bad('9 Point needs 3 of the round\u2019s players');
         if (!(Number.isFinite(g.stake) && g.stake >= 0 && g.stake <= 10000)) bad('9 Point stake must be 0-10,000');
+      } else if (g?.type === 'wolf') {
+        if (typeof g.id !== 'string' || !g.id) bad('Wolf needs an id');
+        if (!Array.isArray(g.players) || g.players.length < 3 || g.players.length > 5 || g.players.some((p) => !ids.includes(p))) bad('Wolf needs 3 to 5 of the round\u2019s players');
+        if (!(Number.isFinite(g.stake) && g.stake >= 0 && g.stake <= 10000)) bad('Wolf stake must be 0-10,000');
+        if (![g.lone, g.blind].every((m) => Number.isInteger(m) && m >= 0 && m <= 10)) bad('Wolf multipliers must be 0-10');
       } else if (g?.type === 'nassau') {
         // An extra Nassau with its own settings; match ids are prefixed with the game id.
         if (!Array.isArray(g.matches) || g.matches.length > 20) bad('Nassau matches missing');
@@ -201,6 +206,22 @@ const handlers = {
   async 'press.remove'(sql, g, user, { roundId, pressId }, ctx) {
     await requireRound(sql, roundId, g, ctx);
     await sql`delete from presses where id = ${str(pressId, 'pressId')} and round_id = ${roundId}`;
+    ctx.touched.add(roundId);
+  },
+
+  /** The wolf's call on one hole of a Wolf game: a partner's id, 'lone' or 'blind' (null clears it). */
+  async 'wolf.pick'(sql, g, user, { roundId, gameId, hole, pick }, ctx) {
+    await requireRound(sql, roundId, g, ctx);
+    const h = String(int(hole, 'hole', 0, 17));
+    const value = pick == null ? null : str(pick, 'pick');
+    // Only this hole's pick in this game changes, so two phones picking on different holes can't clobber each other.
+    await sql`update rounds set updated_at = now(), side_games = (
+        select jsonb_agg(case when e->>'id' = ${str(gameId, 'gameId')} and e->>'type' = 'wolf'
+          then jsonb_set(e, '{picks}', case when ${value}::text is null then coalesce(e->'picks', '{}') - ${h}
+            else coalesce(e->'picks', '{}') || jsonb_build_object(${h}::text, ${value}::text) end)
+          else e end order by i)
+        from jsonb_array_elements(side_games) with ordinality as t(e, i))
+      where id = ${roundId} and group_id = ${g} and jsonb_array_length(side_games) > 0`;
     ctx.touched.add(roundId);
   },
 

@@ -2,6 +2,7 @@ import { html, render, useState, useReducer, useEffect, useMemo, useRef } from '
 import * as N from './nassau.js';
 import * as G from './games.js';
 import * as NP from './ninepoint.js';
+import * as W from './wolf.js';
 import * as A from './auth.js';
 import { API_BASE } from './config.js';
 import { scanScorecard } from './camera.js';
@@ -196,6 +197,15 @@ function reducer(s, a) {
     case 'setHole': return mapRound((r) => ({ ...r, hole: a.hole }));
     case 'addPress': return mapRound((r) => ({ ...r, presses: [...r.presses, a.press] }));
     case 'removePress': return mapRound((r) => ({ ...r, presses: r.presses.filter((p) => p.id !== a.pressId) }));
+    case 'wolfPick': return mapRound((r) => ({
+      ...r, sideGames: r.sideGames.map((g) => {
+        if (g.id !== a.gameId) return g;
+        const picks = { ...g.picks };
+        if (a.pick == null) delete picks[a.hole];
+        else picks[a.hole] = a.pick;
+        return { ...g, picks };
+      }),
+    }));
     case 'setStatus': return mapRound((r) => ({ ...r, status: a.status }));
     case 'claimPlayer': return {
       ...s, players: s.players.map((p) => (p.id === a.id ? { ...p, userId: a.userId } : p.userId === a.userId ? { ...p, userId: null } : p)),
@@ -1039,7 +1049,7 @@ function Setup({ state, dispatch, go, user }) {
   const [addingCourse, setAddingCourse] = useState(false);
   const [scan, setScan] = useState(null); // scorecard result awaiting review
   const [openGame, setOpenGame] = useState(() => nassaus[0].id); // which game's settings are showing
-  const [sideGames, setSideGames] = useState([]); // 9 Point games, each with its own 3 players
+  const [sideGames, setSideGames] = useState([]); // 9 Point (3 players) and Wolf (3-5 players) games
   // Once a reviewed scorecard is applied, the round's players are exactly the card's, in card order:
   // { rows: [{ nameOnCard, playerId, scores }], notes, courseName }
   const [card, setCard] = useState(null);
@@ -1071,7 +1081,7 @@ function Setup({ state, dispatch, go, user }) {
     N.buildMatches(n.game.format, ids, n.teams, n.scoring, n.customDraft ? [...n.custom, n.customDraft] : n.custom, n.wheel, n.balls)), [nassaus, ids.join()]);
   const matchCount = nassauMatches.reduce((t, m) => t + m.length, 0);
   const draftRound = course && { course, players: selected, scores: {}, game: { ...(nassaus[0]?.game ?? N.defaultGame()), matches: nassauMatches[0] ?? [] }, sideGames };
-  const sideOk = sideGames.every((g) => g.players.length === 3 && g.players.every((id) => ids.includes(id)));
+  const sideOk = sideGames.every((g) => (g.type === 'wolf' ? g.players.length >= 3 : g.players.length === 3) && g.players.every((id) => ids.includes(id)));
   const gamesOk = nassaus.length + sideGames.length > 0 && nassauMatches.every((m) => m.length > 0) && sideOk;
 
   const canNext = [ids.length >= 2, !!course, gamesOk][step];
@@ -1100,7 +1110,7 @@ function Setup({ state, dispatch, go, user }) {
   };
   const back = () => (step === 0 ? go({ view: 'home' }) : setStep(step - 1));
 
-  const titles = [["Who's playing?", scan ? 'Match each row on the card to a player, or add them.' : card ? 'The players on your scorecard.' : `Pick 2 to ${MAX_PLAYERS} players. Tap in tee order.`], ['Where to?', 'Pick the course, then the tees you are playing.'], ['Set the games', 'A Nassau, 9 Point, or both. Each game keeps its own score and money.']];
+  const titles = [["Who's playing?", scan ? 'Match each row on the card to a player, or add them.' : card ? 'The players on your scorecard.' : `Pick 2 to ${MAX_PLAYERS} players. Tap in tee order.`], ['Where to?', 'Pick the course, then the tees you are playing.'], ['Set the games', 'A Nassau, 9 Point, Wolf, or a mix. Each game keeps its own score and money.']];
 
   return html`<div class="app">
     <header class="topbar">
@@ -1216,7 +1226,14 @@ function Setup({ state, dispatch, go, user }) {
               scoring=${n.scoring} setScoring=${(v) => setN(n.id, { scoring: v })} balls=${n.balls} setBalls=${(b) => setN(n.id, { balls: b })} custom=${n.custom} setCustom=${(c) => setN(n.id, { custom: c })}
               customDraft=${n.customDraft} setCustomDraft=${(d) => setN(n.id, { customDraft: d })} matches=${nassauMatches[i]} />
           </${GameCard}>`)}
-          ${sideGames.map((g, i) => html`<${GameCard} title=${sideGames.length > 1 ? `9 Point ${i + 1}` : '9 Point'}
+          ${sideGames.filter((g) => g.type === 'wolf').map((g, i, all) => html`<${GameCard} title=${all.length > 1 ? `Wolf ${i + 1}` : 'Wolf'}
+            summary=${`${g.players.map((id) => first(selected.find((p) => p.id === id)?.name ?? '?')).join(', ')} · ${W.wolfSummary(g)}`}
+            problem=${g.players.length < 3 && `Pick 3 to 5 players (${g.players.length} picked)`}
+            open=${openGame === g.id} onToggle=${() => setOpenGame(openGame === g.id ? null : g.id)}
+            onRemove=${() => { setSideGames(sideGames.filter((x) => x.id !== g.id)); setOpenGame(null); }}>
+            <${WolfSetup} round=${draftRound} g=${g} players=${selected} onChange=${(v) => setSideGames(sideGames.map((x) => (x.id === g.id ? v : x)))} />
+          </${GameCard}>`)}
+          ${sideGames.filter((g) => g.type === 'ninepoint').map((g, i, all) => html`<${GameCard} title=${all.length > 1 ? `9 Point ${i + 1}` : '9 Point'}
             summary=${`${g.players.map((id) => first(selected.find((p) => p.id === id)?.name ?? '?')).join(', ')} · ${NP.ninePointSummary(g)}`}
             problem=${g.players.length !== 3 && `Pick 3 players (${g.players.length} picked)`}
             open=${openGame === g.id} onToggle=${() => setOpenGame(openGame === g.id ? null : g.id)}
@@ -1239,12 +1256,16 @@ function Setup({ state, dispatch, go, user }) {
               <span class="plus">${I.plus}</span><b>9 Point</b>
               <small>${ids.length < 3 ? 'Needs 3 players' : '5-3-1 points a hole, 3 players'}</small>
             </button>
+            <button type="button" class="add-game" disabled=${ids.length < 3} onClick=${() => { const g = W.defaultWolf(ids.length <= 5 ? ids : []); setSideGames([...sideGames, g]); setOpenGame(g.id); }}>
+              <span class="plus">${I.plus}</span><b>Wolf</b>
+              <small>${ids.length < 3 ? 'Needs 3 players' : 'Pick a partner or go it alone, 3 to 5 players'}</small>
+            </button>
           </div>
         </div>
       `}
     </main>
     <div class="dock"><div class="dock-inner">
-      <span class="hint">${step === 0 ? `${ids.length} of ${MAX_PLAYERS} selected` : step === 1 ? course?.name ?? 'Pick a course' : [nassaus.length && `${matchCount} Nassau ${matchCount === 1 ? 'match' : 'matches'}`, sideGames.length && `${sideGames.length} × 9 Point`].filter(Boolean).join(' + ') || 'No games'}</span>
+      <span class="hint">${step === 0 ? `${ids.length} of ${MAX_PLAYERS} selected` : step === 1 ? course?.name ?? 'Pick a course' : [nassaus.length && `${matchCount} Nassau ${matchCount === 1 ? 'match' : 'matches'}`, ...[['ninepoint', '9 Point'], ['wolf', 'Wolf']].map(([t, label]) => { const n = sideGames.filter((g) => g.type === t).length; return n && (n > 1 ? `${n} × ${label}` : label); })].filter(Boolean).join(' + ') || 'No games'}</span>
       <button type="button" class="btn primary" disabled=${!canNext} onClick=${next}>${step === 2 ? html`${I.flag} Tee off` : html`Next ${I.arrow}`}</button>
     </div></div>
   </div>`;
@@ -1357,6 +1378,70 @@ function NinePointSetup({ round, g, players, onChange, onRemove }) {
         { value: 'pairs', label: 'Pair by pair', sub: '60/54/48 pts → +18/0/−18' },
       ]} />
     </div>
+  </div>`;
+}
+
+/** Setup for one Wolf game: its players in rotation order, stakes and house rules. */
+function WolfSetup({ round, g, players, onChange }) {
+  const upd = (patch) => onChange({ ...g, ...patch });
+  const toggle = (id) => upd({ players: g.players.includes(id) ? g.players.filter((x) => x !== id) : g.players.length < 5 ? [...g.players, id] : g.players });
+  const ready = g.players.length >= 3;
+  const strokes = useMemo(() => (ready && round ? W.wolfStrokes(round, g) : {}), [round, g]);
+  const name = (id) => first(players.find((p) => p.id === id)?.name ?? '?');
+  const rot = ready ? W.rotationHoles(g) : 18;
+  const leftover = rot < 18 ? (rot === 17 ? 'Hole 18' : `Holes ${rot + 1}\u2013${18}`) : null;
+  return html`<div class="card np-setup">
+    <div class="opt-sub" style="padding-top:14px">
+      <div class="eyebrow" style="margin-bottom:8px">Players, in wolf order ${ready ? '' : html`<span class="neg">· pick 3 to 5</span>`}</div>
+      <div class="chips">${players.map((p) => {
+        const at = g.players.indexOf(p.id);
+        return html`<button type="button" class="chip" aria-pressed=${at >= 0} disabled=${at < 0 && g.players.length >= 5} onClick=${() => toggle(p.id)}>
+          ${at >= 0 ? `${at + 1}. ` : ''}${first(p.name)}${at >= 0 && g.handicap.mode === 'net' && ready ? ` · ${strokes[p.id] ?? 0}` : ''}</button>`;
+      })}</div>
+      ${ready && html`<p class="note" style="margin:8px 0 0">Wolf on hole 1 is ${name(g.players[0])}, then ${g.players.slice(1).map(name).join(', ')}, and around again.${leftover ? ` ${leftover}: ${g.lastHoles === 'trailing' ? 'whoever is furthest behind' : 'keeps rotating'}.` : ''} Tap to change the order.</p>`}
+    </div>
+    <${Opt} title="Per point" desc=${`Each winner collects this from each loser: a partner hole is 1 point, a lone wolf ${g.lone}${g.blind ? `, a blind wolf ${g.blind}` : ''}`}>
+      <${Stepper} label="Dollars per point" value=${g.stake} min=${1} max=${100} step=${1} format=${(v) => `$${v}`} onChange=${(v) => upd({ stake: v })} />
+    </${Opt}>
+    <div class="opt-sub">
+      <div class="eyebrow" style="margin-bottom:8px">Lone wolf</div>
+      <${Seg} value=${g.lone} onChange=${(v) => upd({ lone: v })} options=${[2, 3, 4].map((v) => ({ value: v, label: `\u00d7${v}` }))} />
+    </div>
+    <div class="opt-sub">
+      <div class="eyebrow" style="margin-bottom:8px">Blind wolf <span class="note" style="text-transform:none;letter-spacing:0">· called before anyone tees off</span></div>
+      <${Seg} value=${g.blind} onChange=${(v) => upd({ blind: v })} options=${[{ value: 0, label: 'Off' }, ...[3, 4, 6].map((v) => ({ value: v, label: `\u00d7${v}` }))]} />
+    </div>
+    <div class="opt-sub">
+      <div class="eyebrow" style="margin-bottom:8px">Tied holes</div>
+      <${Seg} tall value=${g.ties} onChange=${(v) => upd({ ties: v })} options=${[
+        { value: 'push', label: 'Push', sub: 'nobody wins' },
+        { value: 'carry', label: 'Carry over', sub: 'next hole worth more' },
+      ]} />
+    </div>
+    ${leftover && html`<div class="opt-sub">
+      <div class="eyebrow" style="margin-bottom:8px">Wolf on ${leftover.toLowerCase()}</div>
+      <${Seg} tall value=${g.lastHoles} onChange=${(v) => upd({ lastHoles: v })} options=${[
+        { value: 'trailing', label: 'Furthest behind', sub: 'a chance to catch up' },
+        { value: 'rotate', label: 'Keep rotating', sub: 'same order' },
+      ]} />
+    </div>`}
+    <div class="opt-sub">
+      <div class="eyebrow" style="margin-bottom:8px">Wolf tees off</div>
+      <${Seg} value=${g.wolfHits} onChange=${(v) => upd({ wolfHits: v })} options=${[{ value: 'last', label: 'Last' }, { value: 'first', label: 'First' }]} />
+    </div>
+    <${Opt} title="Birdies double" desc="A natural birdie on the winning side doubles the hole">
+      <${Switch} label="Birdies double" on=${g.birdies} onChange=${(v) => upd({ birdies: v })} />
+    </${Opt}>
+    <div class="opt-sub"><${Seg} value=${g.handicap.mode} onChange=${(v) => upd({ handicap: { ...g.handicap, mode: v } })} options=${[{ value: 'net', label: 'Net' }, { value: 'gross', label: 'Gross' }]} /></div>
+    ${g.handicap.mode === 'net' && html`
+      <${Opt} title="Allowance" desc="Share of each course handicap used">
+        <${Stepper} label="Wolf allowance" value=${g.handicap.allowance} min=${50} max=${100} step=${5} format=${(v) => `${v}%`}
+          onChange=${(v) => upd({ handicap: { ...g.handicap, allowance: v } })} />
+      </${Opt}>
+      <div class="opt-sub"><${Seg} tall value=${g.handicap.strokesOff} onChange=${(v) => upd({ handicap: { ...g.handicap, strokesOff: v } })} options=${[
+        { value: 'match', label: 'Low man', sub: 'off the best player' },
+        { value: 'full', label: 'Full', sub: 'everyone' },
+      ]} /></div>`}
   </div>`;
 }
 
@@ -1620,6 +1705,8 @@ function ScoreTab({ round, data, dispatch, toast, onSettle }) {
       <button type="button" class="icon-btn" aria-label="Next hole" disabled=${h === 17} onClick=${() => setHole(h + 1)}>${I.next}</button>
     </div>
 
+    ${data.side.filter((r) => r.game.type === 'wolf').map((r) => html`<${WolfCard} round=${round} r=${r} hole=${h} dispatch=${dispatch} />`)}
+
     <div class="card rows">
       ${round.players.map((p) => {
         const g = round.scores[p.id][h];
@@ -1649,7 +1736,7 @@ function ScoreTab({ round, data, dispatch, toast, onSettle }) {
       <div class="section-head"><h2>${nassauTitle(data, i)}</h2><span class="meta">${nassauStakes(n.game)} · ${n.game.autoPress.enabled ? `${n.game.autoPress.down}-down autos` : 'no auto presses'}</span></div>
       ${n.matches.map((c) => html`<${MatchCard} round=${c.view} c=${c} dispatch=${dispatch} compact />`)}
     </div>`)}
-    ${data.side.map((r) => html`<${NinePointCard} round=${round} r=${r} hole=${h} />`)}
+    ${data.side.filter((r) => r.game.type !== 'wolf').map((r) => html`<${SideCard} round=${round} r=${r} hole=${h} />`)}
 
     <div class="fab-row"><div class="dock-inner">
       ${h < 17
@@ -1718,6 +1805,76 @@ function CardTab({ round, data, dispatch }) {
 }
 
 /** A 9 Point game: points and money so far. `hole` highlights one hole (Score tab); `detail` adds the hole-by-hole grid (Bets tab). */
+/** A 9 Point or Wolf game's card. */
+const SideCard = (props) => (props.r.game.type === 'wolf' ? html`<${WolfCard} ...${props} />` : html`<${NinePointCard} ...${props} />`);
+
+/** "Bo & Al", "Bo alone", "Bo blind": the call on a Wolf hole. */
+function wolfCall(round, x) {
+  const n = (id) => first(round.players.find((p) => p.id === id)?.name ?? '?');
+  if (!x.pick) return null;
+  return x.pick === 'lone' ? `${n(x.wolf)} alone` : x.pick === 'blind' ? `${n(x.wolf)} blind` : `${n(x.wolf)} & ${n(x.pick)}`;
+}
+
+/**
+ * Wolf. On the Score tab (`hole` set) it shows who's the wolf, the tee order and buttons for
+ * the call; elsewhere the standings, and with `detail` every hole.
+ */
+function WolfCard({ round, r, hole, detail, dispatch }) {
+  const g = r.game;
+  const n = (id) => first(round.players.find((p) => p.id === id)?.name ?? '?');
+  const pl = g.players.map((id) => round.players.find((p) => p.id === id)).filter(Boolean);
+  const ranked = [...pl].sort((a, b) => r.totals[b.id] - r.totals[a.id]);
+  const cur = hole != null ? r.holes[hole] : null;
+  const call = (pick) => dispatch?.({ type: 'wolfPick', roundId: round.id, gameId: g.id, hole, pick: cur.pick === pick ? null : pick });
+  const result = (x) => {
+    if (x.winner === 'tie') return g.ties === 'carry' ? 'Tied, carried' : 'Push';
+    if (!x.winner) return null;
+    const win = x.winner === 'a' ? x.a : x.b;
+    return `${win.map(n).join(' & ')} ${win.length === 1 ? 'wins' : 'win'} +${x.points[win[0]]}${win.length > 1 ? ' each' : ''}`;
+  };
+  const holes = Array.from({ length: 18 }, (_, i) => i);
+  const nine = (s) => holes.slice(s, s + 9);
+  const part = (id, s) => nine(s).reduce((t, i) => t + (r.holes[i].points[id] ?? 0), 0);
+  const callTag = (x) => (!x.pick ? '' : x.pick === 'lone' ? 'L' : x.pick === 'blind' ? 'B' : n(x.pick)[0]);
+  return html`<div class="card match np-card">
+    <div class="section-head">
+      <h2>Wolf</h2>
+      <span class="meta">${W.wolfSummary(g)}</span>
+    </div>
+    ${cur && html`<div class="wolf-hole">
+      <div class="wolf-who"><b>${n(cur.wolf)}</b> is the wolf${hole >= W.rotationHoles(g) && g.lastHoles === 'trailing' ? html` <span class="note">· furthest behind</span>` : ''}</div>
+      <div class="note">Tee order: ${W.teeOrder(g, cur.wolf).map(n).join(', ')}</div>
+      <div class="chips" role="group" aria-label=${`${n(cur.wolf)}'s call`}>
+        ${g.players.filter((id) => id !== cur.wolf).map((id) => html`<button type="button" class="chip" aria-pressed=${cur.pick === id} onClick=${() => call(id)}>with ${n(id)}</button>`)}
+        <button type="button" class="chip" aria-pressed=${cur.pick === 'lone'} onClick=${() => call('lone')}>Lone \u00d7${g.lone}</button>
+        ${g.blind > 0 && html`<button type="button" class="chip" aria-pressed=${cur.pick === 'blind'} onClick=${() => call('blind')}>Blind \u00d7${g.blind}</button>`}
+      </div>
+      ${cur.needsPick ? html`<div class="note neg">Pick ${n(cur.wolf)}\u2019s call to score this hole.</div>`
+        : result(cur) ? html`<div><span class="pill a">${result(cur)}${cur.birdie ? ' \u00b7 birdie' : ''}</span></div>`
+        : cur.pick && html`<div class="note">${wolfCall(round, cur)}${cur.mult > 1 ? `, \u00d7${cur.mult}` : ''}${cur.carried ? ` + ${cur.carried} carried` : ''}</div>`}
+    </div>`}
+    ${r.pendingCarry > 0 && r.thru < 18 && html`<div class="np-hole"><span class="pill b">${r.pendingCarry} ${r.pendingCarry === 1 ? 'point' : 'points'} carried to the next hole</span></div>`}
+    <div class="np-rows">${ranked.map((p) => html`<div class="np-row">
+      <${Avatar} p=${p} size="sm" />
+      <span class="grow">${first(p.name)} <span class="note">${r.strokes[p.id] ? `${r.strokes[p.id]} ${r.strokes[p.id] === 1 ? 'stroke' : 'strokes'}` : ''}</span></span>
+      <span class="np-pts num">${r.totals[p.id] > 0 ? '+' : ''}${r.totals[p.id]} pts</span>
+      <b class=${`num ${moneyCls(r.money[p.id] || 0)}`}>${money(r.money[p.id] || 0)}</b>
+    </div>`)}</div>
+    ${detail && html`<div class="sc-wrap"><table class="sc">
+      <tbody>
+        <tr class="hdr"><th class="stick" scope="col">Hole</th>${nine(0).map((i) => html`<td>${i + 1}</td>`)}<td class="tot">Out</td>${nine(9).map((i) => html`<td>${i + 1}</td>`)}<td class="tot">In</td><td class="tot">Tot</td></tr>
+        <tr class="si"><td class="stick">Wolf</td>${nine(0).map((i) => html`<td>${n(r.holes[i].wolf)[0]}</td>`)}<td class="tot"></td>${nine(9).map((i) => html`<td>${n(r.holes[i].wolf)[0]}</td>`)}<td class="tot"></td><td class="tot"></td></tr>
+        <tr class="si"><td class="stick">Call</td>${nine(0).map((i) => html`<td>${callTag(r.holes[i])}</td>`)}<td class="tot"></td>${nine(9).map((i) => html`<td>${callTag(r.holes[i])}</td>`)}<td class="tot"></td><td class="tot"></td></tr>
+        ${pl.map((p) => html`<tr><td class="stick">${first(p.name)}</td>
+          ${nine(0).map((i) => html`<td class=${(r.holes[i].points[p.id] ?? 0) > 0 ? 'np-sweep' : ''}>${r.holes[i].winner ? (r.holes[i].points[p.id] ?? 0) : ''}</td>`)}<td class="tot">${part(p.id, 0)}</td>
+          ${nine(9).map((i) => html`<td class=${(r.holes[i].points[p.id] ?? 0) > 0 ? 'np-sweep' : ''}>${r.holes[i].winner ? (r.holes[i].points[p.id] ?? 0) : ''}</td>`)}<td class="tot">${part(p.id, 9)}</td><td class="tot">${r.totals[p.id]}</td>
+        </tr>`)}
+      </tbody>
+    </table></div>
+    <p class="note" style="margin:0">Call: first letter of the partner, L = lone wolf, B = blind wolf. Each winner collects the hole\u2019s points from each loser; money is points \u00d7 $${g.stake}.</p>`}
+  </div>`;
+}
+
 function NinePointCard({ round, r, hole, detail }) {
   const g = r.game;
   const pl = g.players.map((id) => round.players.find((p) => p.id === id)).filter(Boolean);
@@ -1782,7 +1939,7 @@ function DayTotal({ round, data }) {
         // Group v group: name the ball ("2nd ball"), since every match is against the same side.
         what: c.match.ball || (ballChip(c.match) && data.matches.some((x) => x !== c && x.match.ball)) ? ballChip(c.match)
           : `v ${sideNames(round, c.match.a.includes(p.id) ? c.match.b : c.match.a).split(' & ').map((n) => n[0]).join('')}`,
-      })).concat(data.side.filter((r) => r.game.players.includes(p.id)).map((r) => ({ v: r.money[p.id] || 0, what: 'v 9 Pt' })));
+      })).concat(data.side.filter((r) => r.game.players.includes(p.id)).map((r) => ({ v: r.money[p.id] || 0, what: r.game.type === 'wolf' ? 'Wolf' : 'v 9 Pt' })));
       return html`<div class="board-row" style="grid-template-columns:minmax(0,1fr) auto">
         <div style="min-width:0">
           <div class="pname">${first(p.name)}</div>
@@ -1833,7 +1990,7 @@ function BetsTab({ round, data, dispatch }) {
         </div>
       </div>`;
     })}
-    ${data.side.map((r) => html`<div class="section"><${NinePointCard} round=${round} r=${r} detail /></div>`)}
+    ${data.side.map((r) => html`<div class="section"><${SideCard} round=${round} r=${r} detail /></div>`)}
     ${data.matches.length > 0 && html`<p class="note">Each cell is the bet's running status after that hole. Ties push. A press runs from its first hole to the end of its nine (or the 18).</p>`}
   </main>`;
 }
@@ -1887,7 +2044,7 @@ function SettleTab({ round, data, dispatch, go, toast }) {
         </div>`;
       })}</div>
     </div>`}
-    ${data.side.map((r) => html`<div class="section"><${NinePointCard} round=${round} r=${r} /></div>`)}
+    ${data.side.map((r) => html`<div class="section"><${SideCard} round=${round} r=${r} /></div>`)}
 
     <div style="display:flex;flex-direction:column;gap:10px">
       <button type="button" class="btn ghost block" onClick=${() => {
