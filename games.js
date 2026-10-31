@@ -1,6 +1,6 @@
 // Every game in a round, added up. A round's first Nassau lives in round.game
 // (it may have no matches); more Nassaus, each with its own settings, and 9 Point
-// Wolf, Hammer and Vegas games live in round.sideGames ({ type: 'nassau' | 'ninepoint' | 'wolf' | 'hammer' | 'vegas', ... }).
+// Wolf, Hammer, Vegas and Snake games live in round.sideGames ({ type: 'nassau' | 'ninepoint' | 'wolf' | ..., ... }).
 // Extra Nassaus' match ids are prefixed with the game id, so presses (which point
 // at a match id) never collide across Nassaus.
 // Pure functions: used by the app, the server ledger and the Money tab.
@@ -10,9 +10,10 @@ import { computeNinePoint } from './ninepoint.js';
 import { computeWolf } from './wolf.js';
 import { computeHammer } from './hammer.js';
 import { computeVegas } from './vegas.js';
+import { computeSnake } from './snake.js';
 
 /** Side games that aren't Nassaus, and how to score each. */
-const SCORERS = { ninepoint: computeNinePoint, wolf: computeWolf, hammer: computeHammer, vegas: computeVegas };
+const SCORERS = { ninepoint: computeNinePoint, wolf: computeWolf, hammer: computeHammer, vegas: computeVegas, snake: computeSnake };
 
 export const sideGamesOf = (round) => round.sideGames || [];
 
@@ -30,7 +31,7 @@ export const hasNassau = (round) => nassausOf(round).length > 0;
 
 const round2 = (v) => Math.round(v * 100) / 100;
 
-/** Results for each 9 Point, Wolf, Hammer and Vegas game, in order. Each has { game, money, pairwise, totals, holes }. */
+/** Results for each side game (9 Point, Wolf, Hammer, Vegas, Snake), in order. Each has { game, money, pairwise, totals, holes }. */
 export function sideResults(round) {
   return sideGamesOf(round).filter((g) => SCORERS[g.type]).map((g) => SCORERS[g.type](round, g));
 }
@@ -41,7 +42,7 @@ export function sideResults(round) {
  *                        so it's the same in both)
  *   matches: every Nassau's computed matches, each with `view` (that Nassau's round view,
  *            for its stakes and press rules) and `gameId`
- *   nassaus: [{ id, game, view, matches }]; side: 9 Point, Wolf, Hammer and Vegas results
+ *   nassaus: [{ id, game, view, matches }]; side: every other game's results
  */
 export function settleAll(round) {
   const side = sideResults(round);
@@ -87,7 +88,7 @@ export function gamesLabel(round) {
   const ns = nassausOf(round);
   if (ns.length === 1) parts.push(`${N.SEGMENT_KEYS.map((k) => ns[0].game.stakes[k]).join('-')} Nassau`);
   else if (ns.length > 1) parts.push(`${ns.length} Nassaus`);
-  for (const [type, name] of [['ninepoint', '9 Point'], ['wolf', 'Wolf'], ['hammer', 'Hammer'], ['vegas', 'Vegas']]) {
+  for (const [type, name] of [['ninepoint', '9 Point'], ['wolf', 'Wolf'], ['hammer', 'Hammer'], ['vegas', 'Vegas'], ['snake', 'Snake']]) {
     const n = sideGamesOf(round).filter((g) => g.type === type).length;
     if (n) parts.push(n > 1 ? `${n}× ${name}` : name);
   }

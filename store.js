@@ -31,6 +31,7 @@ function opKey(op) {
   if (op.type === 'round.hole') return `hole|${op.roundId}`;
   if (op.type === 'wolf.pick') return `wolf|${op.roundId}|${op.gameId}|${op.hole}`;
   if (op.type === 'hammer.set') return `hammer|${op.roundId}|${op.gameId}|${op.hole}`;
+  if (op.type === 'snake.set') return `snake|${op.roundId}|${op.gameId}|${op.hole}`;
   return null;
 }
 const hasData = (s) => s.players.length || s.courses.length || s.rounds.length;
@@ -64,6 +65,7 @@ export function opsFor(a, s) {
     case 'setHole': return [{ type: 'round.hole', roundId: a.roundId, hole: a.hole }];
     case 'addPress': return [{ type: 'press.add', roundId: a.roundId, press: a.press }];
     case 'removePress': return [{ type: 'press.remove', roundId: a.roundId, pressId: a.pressId }];
+    case 'snakeSet': return [{ type: 'snake.set', roundId: a.roundId, gameId: a.gameId, hole: a.hole, putts: a.putts?.length ? a.putts : null }];
     case 'hammerSet': return [{ type: 'hammer.set', roundId: a.roundId, gameId: a.gameId, hole: a.hole, throws: a.throws ?? null }];
     case 'wolfPick': return [{ type: 'wolf.pick', roundId: a.roundId, gameId: a.gameId, hole: a.hole, pick: a.pick ?? null }];
     case 'setStatus': return [{ type: 'round.status', roundId: a.roundId, status: a.status }];

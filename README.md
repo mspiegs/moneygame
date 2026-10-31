@@ -2,6 +2,7 @@
 
 A phone-first app for golf money games, starting with the Nassau.
 
+- Snake (putting) for 2+ players: tap three-putts, last one holds it, grows per three-putt, 4-putts count twice, front and back snakes
 - Vegas for 2 v 2: birdie flips, 10+ goes first or counts as 9, switch partners every 6, per-hole cap
 - Hammer for 1 v 1 or 2 v 2: hammer back, fold, first hammer rules, per-hole limit, carryovers, birdies double
 - Wolf for 3–5 players: partner, lone or blind wolf, carryovers, birdies double, trailing wolf on the last holes

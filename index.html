@@ -208,6 +208,13 @@ button.row:hover { background: var(--surface-2); }
 .btn.sm { height: 36px; padding: 0 14px; font-size: 13.5px; border-radius: 11px; }
 .btn.lg { height: 56px; font-size: 17px; border-radius: 16px; }
 .link { color: var(--accent); font-weight: 700; font-size: 13.5px; }
+.snake-status { display: flex; align-items: center; gap: 10px; font-size: 14.5px; padding: 2px 0 10px; }
+.snake-ic { display: inline-flex; width: 30px; height: 30px; border-radius: 50%; align-items: center; justify-content: center; background: var(--line); color: var(--ink-2); flex: none; }
+.snake-ic svg { width: 20px; height: 20px; }
+.snake-ic.held { background: var(--flag-soft); color: var(--loss); }
+.snake-ic.sm { width: 20px; height: 20px; vertical-align: middle; }
+.snake-ic.sm svg { width: 14px; height: 14px; }
+.snake-hole { display: flex; flex-direction: column; gap: 8px; padding: 10px 0 12px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); margin-bottom: 4px; }
 .hammer-hole { display: flex; flex-direction: column; gap: 10px; padding: 2px 0 12px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
 .hammer-value { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .hammer-value > div:first-child { display: flex; flex-direction: column; }

@@ -5,6 +5,7 @@ import * as NP from './ninepoint.js';
 import * as W from './wolf.js';
 import * as HM from './hammer.js';
 import * as VG from './vegas.js';
+import * as SN from './snake.js';
 import * as A from './auth.js';
 import { API_BASE } from './config.js';
 import { scanScorecard } from './camera.js';
@@ -20,6 +21,7 @@ const I = {
   check: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>`,
   x: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>`,
   hammer: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 9.5L4 20"/><path d="M9.5 4.5l3-1.5 8.5 8.5-1.5 3z"/><path d="M12.5 3l-4 4 8.5 8.5 4-4"/></svg>`,
+  snake: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18c2.5 0 3-3 5.5-3S11 18 13.5 18 16 12 13 9.5 9.5 6 12 4.5s5 .5 6 2"/><circle cx="19.2" cy="6.2" r=".6" fill="currentColor"/></svg>`,
   flag: html`<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 2.5a1 1 0 0 1 1 1V4l11.2 4.3a.8.8 0 0 1 0 1.5L7 14v7.5a1 1 0 1 1-2 0v-18a1 1 0 0 1 1-1z"/></svg>`,
   flagO: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M6 21V3.5M6 4.5l11.5 4.5L6 13.5"/></svg>`,
   card: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M3 10h18M9 10v9M15 10v9"/></svg>`,
@@ -200,6 +202,15 @@ function reducer(s, a) {
     case 'setHole': return mapRound((r) => ({ ...r, hole: a.hole }));
     case 'addPress': return mapRound((r) => ({ ...r, presses: [...r.presses, a.press] }));
     case 'removePress': return mapRound((r) => ({ ...r, presses: r.presses.filter((p) => p.id !== a.pressId) }));
+    case 'snakeSet': return mapRound((r) => ({
+      ...r, sideGames: r.sideGames.map((g) => {
+        if (g.id !== a.gameId) return g;
+        const snakes = { ...g.snakes };
+        if (a.putts?.length) snakes[a.hole] = a.putts;
+        else delete snakes[a.hole];
+        return { ...g, snakes };
+      }),
+    }));
     case 'hammerSet': return mapRound((r) => ({
       ...r, sideGames: r.sideGames.map((g) => {
         if (g.id !== a.gameId) return g;
@@ -1096,6 +1107,7 @@ function Setup({ state, dispatch, go, user }) {
   const matchCount = nassauMatches.reduce((t, m) => t + m.length, 0);
   const draftRound = course && { course, players: selected, scores: {}, game: { ...(nassaus[0]?.game ?? N.defaultGame()), matches: nassauMatches[0] ?? [] }, sideGames };
   const sideOk = sideGames.every((g) => (g.type === 'hammer' ? HM.sidesOk(g) : g.type === 'vegas' ? VG.sidesOk(g)
+    : g.type === 'snake' ? g.players.length >= 2 && g.players.every((id) => ids.includes(id))
     : (g.type === 'wolf' ? g.players.length >= 3 : g.players.length === 3) && g.players.every((id) => ids.includes(id))));
   const gamesOk = nassaus.length + sideGames.length > 0 && nassauMatches.every((m) => m.length > 0) && sideOk;
 
@@ -1125,7 +1137,7 @@ function Setup({ state, dispatch, go, user }) {
   };
   const back = () => (step === 0 ? go({ view: 'home' }) : setStep(step - 1));
 
-  const titles = [["Who's playing?", scan ? 'Match each row on the card to a player, or add them.' : card ? 'The players on your scorecard.' : `Pick 2 to ${MAX_PLAYERS} players. Tap in tee order.`], ['Where to?', 'Pick the course, then the tees you are playing.'], ['Set the games', 'Mix and match Nassaus, 9 Point, Wolf, Hammer and Vegas. Each game keeps its own score and money.']];
+  const titles = [["Who's playing?", scan ? 'Match each row on the card to a player, or add them.' : card ? 'The players on your scorecard.' : `Pick 2 to ${MAX_PLAYERS} players. Tap in tee order.`], ['Where to?', 'Pick the course, then the tees you are playing.'], ['Set the games', 'Mix and match Nassaus, 9 Point, Wolf, Hammer, Vegas and Snake. Each game keeps its own score and money.']];
 
   return html`<div class="app">
     <header class="topbar">
@@ -1262,6 +1274,13 @@ function Setup({ state, dispatch, go, user }) {
             onRemove=${() => { setSideGames(sideGames.filter((x) => x.id !== g.id)); setOpenGame(null); }}>
             <${VegasSetup} round=${draftRound} g=${g} players=${selected} onChange=${(v) => setSideGames(sideGames.map((x) => (x.id === g.id ? v : x)))} />
           </${GameCard}>`)}
+          ${sideGames.filter((g) => g.type === 'snake').map((g, i, all) => html`<${GameCard} title=${all.length > 1 ? `Snake ${i + 1}` : 'Snake'}
+            summary=${`${g.players.length === ids.length ? 'Everyone' : g.players.map((id) => first(selected.find((p) => p.id === id)?.name ?? '?')).join(', ')} · ${SN.snakeSummary(g)}`}
+            problem=${g.players.length < 2 && 'Pick at least 2 players'}
+            open=${openGame === g.id} onToggle=${() => setOpenGame(openGame === g.id ? null : g.id)}
+            onRemove=${() => { setSideGames(sideGames.filter((x) => x.id !== g.id)); setOpenGame(null); }}>
+            <${SnakeSetup} g=${g} players=${selected} onChange=${(v) => setSideGames(sideGames.map((x) => (x.id === g.id ? v : x)))} />
+          </${GameCard}>`)}
           ${sideGames.filter((g) => g.type === 'ninepoint').map((g, i, all) => html`<${GameCard} title=${all.length > 1 ? `9 Point ${i + 1}` : '9 Point'}
             summary=${`${g.players.map((id) => first(selected.find((p) => p.id === id)?.name ?? '?')).join(', ')} · ${NP.ninePointSummary(g)}`}
             problem=${g.players.length !== 3 && `Pick 3 players (${g.players.length} picked)`}
@@ -1297,12 +1316,16 @@ function Setup({ state, dispatch, go, user }) {
               <span class="plus">${I.plus}</span><b>Vegas</b>
               <small>${ids.length < 4 ? 'Needs 4 players' : 'Team scores as numbers: 4 and 5 make 45'}</small>
             </button>
+            <button type="button" class="add-game" onClick=${() => { const g = SN.defaultSnake(ids); setSideGames([...sideGames, g]); setOpenGame(g.id); }}>
+              <span class="plus">${I.plus}</span><b>Snake</b>
+              <small>Three-putt and you hold the snake</small>
+            </button>
           </div>
         </div>
       `}
     </main>
     <div class="dock"><div class="dock-inner">
-      <span class="hint">${step === 0 ? `${ids.length} of ${MAX_PLAYERS} selected` : step === 1 ? course?.name ?? 'Pick a course' : [nassaus.length && `${matchCount} Nassau ${matchCount === 1 ? 'match' : 'matches'}`, ...[['ninepoint', '9 Point'], ['wolf', 'Wolf'], ['hammer', 'Hammer'], ['vegas', 'Vegas']].map(([t, label]) => { const n = sideGames.filter((g) => g.type === t).length; return n && (n > 1 ? `${n} × ${label}` : label); })].filter(Boolean).join(' + ') || 'No games'}</span>
+      <span class="hint">${step === 0 ? `${ids.length} of ${MAX_PLAYERS} selected` : step === 1 ? course?.name ?? 'Pick a course' : [nassaus.length && `${matchCount} Nassau ${matchCount === 1 ? 'match' : 'matches'}`, ...[['ninepoint', '9 Point'], ['wolf', 'Wolf'], ['hammer', 'Hammer'], ['vegas', 'Vegas'], ['snake', 'Snake']].map(([t, label]) => { const n = sideGames.filter((g) => g.type === t).length; return n && (n > 1 ? `${n} × ${label}` : label); })].filter(Boolean).join(' + ') || 'No games'}</span>
       <button type="button" class="btn primary" disabled=${!canNext} onClick=${next}>${step === 2 ? html`${I.flag} Tee off` : html`Next ${I.arrow}`}</button>
     </div></div>
   </div>`;
@@ -1413,6 +1436,35 @@ function NinePointSetup({ round, g, players, onChange, onRemove }) {
       <${Seg} tall value=${g.settle} onChange=${(v) => upd({ settle: v })} options=${[
         { value: 'average', label: 'Vs. average', sub: '60/54/48 pts → +6/0/−6' },
         { value: 'pairs', label: 'Pair by pair', sub: '60/54/48 pts → +18/0/−18' },
+      ]} />
+    </div>
+  </div>`;
+}
+
+/** Setup for one Snake game: who's in, what it's worth and house rules. */
+function SnakeSetup({ g, players, onChange }) {
+  const upd = (patch) => onChange({ ...g, ...patch });
+  const toggle = (id) => upd({ players: g.players.includes(id) ? g.players.filter((x) => x !== id) : [...g.players, id] });
+  return html`<div class="card np-setup">
+    <div class="opt-sub" style="padding-top:14px">
+      <div class="eyebrow" style="margin-bottom:8px">Who's in ${g.players.length < 2 ? html`<span class="neg">· pick 2 or more</span>` : ''}</div>
+      <div class="chips">${players.map((p) => html`<button type="button" class="chip" aria-pressed=${g.players.includes(p.id)} onClick=${() => toggle(p.id)}>${first(p.name)}</button>`)}</div>
+    </div>
+    <p class="opt-sub note" style="margin:0">Three-putt and you take the snake. It stays with you until someone else three-putts. Whoever holds it at the end pays everyone else.</p>
+    <${Opt} title="Snake is worth" desc=${g.grow ? 'To each player, for each three-putt in the game' : 'To each player'}>
+      <${Stepper} label="Snake dollars" value=${g.stake} min=${1} max=${100} step=${1} format=${(v) => `$${v}`} onChange=${(v) => upd({ stake: v })} />
+    </${Opt}>
+    <${Opt} title="It grows" desc=${g.grow ? `Every three-putt adds $${g.stake}: after 5 three-putts the holder pays $${g.stake * 5} to each` : `Off: the holder pays a flat $${g.stake} to each`}>
+      <${Switch} label="Snake grows" on=${g.grow} onChange=${(v) => upd({ grow: v })} />
+    </${Opt}>
+    <${Opt} title="Four-putts count twice" desc="A four-putt or worse counts as two three-putts">
+      <${Switch} label="Four-putts count twice" on=${g.fourDouble} onChange=${(v) => upd({ fourDouble: v })} />
+    </${Opt}>
+    <div class="opt-sub">
+      <div class="eyebrow" style="margin-bottom:8px">Snakes</div>
+      <${Seg} tall value=${g.nines ? 'nines' : 'one'} onChange=${(v) => upd({ nines: v === 'nines' })} options=${[
+        { value: 'one', label: 'One for 18', sub: 'settled at the end' },
+        { value: 'nines', label: 'Front and back', sub: 'a fresh snake on 10' },
       ]} />
     </div>
   </div>`;
@@ -1881,7 +1933,7 @@ function ScoreTab({ round, data, dispatch, toast, onSettle }) {
       <div class="section-head"><h2>${nassauTitle(data, i)}</h2><span class="meta">${nassauStakes(n.game)} · ${n.game.autoPress.enabled ? `${n.game.autoPress.down}-down autos` : 'no auto presses'}</span></div>
       ${n.matches.map((c) => html`<${MatchCard} round=${c.view} c=${c} dispatch=${dispatch} compact />`)}
     </div>`)}
-    ${data.side.filter((r) => r.game.type === 'ninepoint' || r.game.type === 'vegas').map((r) => html`<${SideCard} round=${round} r=${r} hole=${h} />`)}
+    ${data.side.filter((r) => r.game.type === 'ninepoint' || r.game.type === 'vegas' || r.game.type === 'snake').map((r) => html`<${SideCard} round=${round} r=${r} hole=${h} dispatch=${dispatch} />`)}
 
     <div class="fab-row"><div class="dock-inner">
       ${h < 17
@@ -1952,11 +2004,60 @@ function CardTab({ round, data, dispatch }) {
 /** A 9 Point game: points and money so far. `hole` highlights one hole (Score tab); `detail` adds the hole-by-hole grid (Bets tab). */
 /** A 9 Point or Wolf game's card. */
 const SideCard = (props) => {
-  const Card = { wolf: WolfCard, hammer: HammerCard, vegas: VegasCard }[props.r.game.type] ?? NinePointCard;
+  const Card = { wolf: WolfCard, hammer: HammerCard, vegas: VegasCard, snake: SnakeCard }[props.r.game.type] ?? NinePointCard;
   return html`<${Card} ...${props} />`;
 };
 /** Everyone in a side game. */
 const sidePlayers = (g) => g.players ?? [...g.a, ...g.b];
+
+/**
+ * Snake. On the Score tab (`hole` set) it shows who holds the snake and a chip per player
+ * to mark a three-putt on this hole (tap again for a four-putt, again to clear).
+ */
+function SnakeCard({ round, r, hole, detail, dispatch }) {
+  const g = r.game;
+  const n = (id) => first(round.players.find((p) => p.id === id)?.name ?? '?');
+  const pl = g.players.map((id) => round.players.find((p) => p.id === id)).filter(Boolean);
+  const seg = hole != null ? r.segments.find((s) => hole >= s.start && hole <= s.end) : r.live;
+  const here = hole != null ? r.holes[hole] : [];
+  const tap = (id) => dispatch?.({ type: 'snakeSet', roundId: round.id, gameId: g.id, hole, putts: SN.nextPutts(g.snakes?.[hole], id) });
+  const ranked = [...pl].sort((a, b) => (r.money[b.id] || 0) - (r.money[a.id] || 0));
+  const segName = (s) => (g.nines ? `${s.label} nine snake` : 'The snake');
+  return html`<div class="card match np-card">
+    <div class="section-head">
+      <h2>Snake</h2>
+      <span class="meta">${SN.snakeSummary(g)}</span>
+    </div>
+    <div class="snake-status">
+      <span class=${`snake-ic ${seg.holder ? 'held' : ''}`}>${I.snake}</span>
+      ${seg.holder ? html`<span><b>${n(seg.holder)}</b> has ${g.nines ? `the ${seg.label.toLowerCase()} nine snake` : 'the snake'}<span class="note"> \u00b7 pays $${seg.value} to each${seg.done ? '' : ' if it ends now'}</span></span>`
+        : html`<span>${segName(seg)} is loose<span class="note"> \u00b7 first three-putt takes it</span></span>`}
+    </div>
+    ${hole != null && dispatch && html`<div class="snake-hole">
+      <div class="eyebrow">Three-putts on hole ${hole + 1}</div>
+      <div class="chips">${pl.map((p) => {
+        const e = here.find((x) => x.p === p.id);
+        return html`<button type="button" class="chip" aria-pressed=${!!e} onClick=${() => tap(p.id)}>${first(p.name)}${e ? (e.n >= 4 ? ' \u00b7 4+ putts' : ' \u00b7 3 putts') : ''}</button>`;
+      })}</div>
+      <p class="note" style="margin:0">Tap again for a four-putt. Two on one hole? Tap them in order: the last one holds the snake.</p>
+    </div>`}
+    ${g.nines && hole == null && html`<div class="np-hole" style="flex-wrap:wrap;gap:6px 14px">${r.segments.map((s) => html`<span>${s.label}: ${s.holder ? html`<b>${n(s.holder)}</b> pays $${s.value} each` : 'nobody'}</span>`)}</div>`}
+    <div class="np-rows">${ranked.map((p) => html`<div class="np-row">
+      <${Avatar} p=${p} size="sm" />
+      <span class="grow">${first(p.name)}${r.segments.some((s) => s.holder === p.id) ? html` <span class="snake-ic held sm">${I.snake}</span>` : ''}</span>
+      <b class=${`num ${moneyCls(r.money[p.id] || 0)}`}>${money(r.money[p.id] || 0)}</b>
+    </div>`)}</div>
+    ${detail && html`<div class="sc-wrap"><table class="sc">
+      <tbody>
+        <tr class="hdr"><th class="stick" scope="col">Hole</th>${Array.from({ length: 18 }, (_, i) => html`<td>${i + 1}</td>`)}</tr>
+        ${pl.map((p) => html`<tr><td class="stick">${first(p.name)}</td>
+          ${r.holes.map((list) => { const e = list.find((x) => x.p === p.id); return html`<td class=${e ? 'np-sweep' : ''}>${e ? (e.n >= 4 ? '4' : '3') : ''}</td>`; })}
+        </tr>`)}
+      </tbody>
+    </table></div>
+    <p class="note" style="margin:0">3 = three-putt, 4 = four-putt or worse. The last one ${g.nines ? 'on each nine ' : ''}holds the snake.</p>`}
+  </div>`;
+}
 
 /** Vegas: this hole's team numbers and points, standings, and with `detail` every hole. */
 function VegasCard({ round, r, hole, detail }) {
@@ -2197,7 +2298,7 @@ function DayTotal({ round, data }) {
         // Group v group: name the ball ("2nd ball"), since every match is against the same side.
         what: c.match.ball || (ballChip(c.match) && data.matches.some((x) => x !== c && x.match.ball)) ? ballChip(c.match)
           : `v ${sideNames(round, c.match.a.includes(p.id) ? c.match.b : c.match.a).split(' & ').map((n) => n[0]).join('')}`,
-      })).concat(data.side.filter((r) => sidePlayers(r.game).includes(p.id)).map((r) => ({ v: r.money[p.id] || 0, what: { wolf: 'Wolf', hammer: 'Hammer', vegas: 'Vegas' }[r.game.type] ?? 'v 9 Pt' })));
+      })).concat(data.side.filter((r) => sidePlayers(r.game).includes(p.id)).map((r) => ({ v: r.money[p.id] || 0, what: { wolf: 'Wolf', hammer: 'Hammer', vegas: 'Vegas', snake: 'Snake' }[r.game.type] ?? 'v 9 Pt' })));
       return html`<div class="board-row" style="grid-template-columns:minmax(0,1fr) auto">
         <div style="min-width:0">
           <div class="pname">${first(p.name)}</div>

@@ -134,6 +134,10 @@ const handlers = {
       } else if (g?.type === 'vegas') {
         if (![g.a, g.b].every((t) => Array.isArray(t) && t.length === 2 && t.every((p) => ids.includes(p))) || new Set([...g.a, ...g.b]).size !== 4) bad('Vegas needs two teams of 2 of the round\u2019s players');
         if (!(Number.isFinite(g.stake) && g.stake > 0 && g.stake <= 1000)) bad('Vegas stake must be up to 1,000 a point');
+      } else if (g?.type === 'snake') {
+        if (typeof g.id !== 'string' || !g.id) bad('Snake needs an id');
+        if (!Array.isArray(g.players) || g.players.length < 2 || g.players.some((p) => !ids.includes(p))) bad('Snake needs 2 or more of the round\u2019s players');
+        if (!(Number.isFinite(g.stake) && g.stake > 0 && g.stake <= 10000)) bad('Snake stake must be up to 10,000');
       } else if (g?.type === 'nassau') {
         // An extra Nassau with its own settings; match ids are prefixed with the game id.
         if (!Array.isArray(g.matches) || g.matches.length > 20) bad('Nassau matches missing');
@@ -247,6 +251,15 @@ const handlers = {
     const value = t == null ? null
       : { by: t.by === 'a' || t.by === 'b' ? t.by : bad('hammer.by'), n: int(t.n, 'hammer.n', 1, 20), declined: !!t.declined };
     await setGameHole(sql, g, roundId, str(gameId, 'gameId'), 'hammer', 'hammers', hole, value);
+    ctx.touched.add(roundId);
+  },
+
+  /** The three-putts on one hole of a Snake game, in order: [{ p, n }] (null or [] clears it). */
+  async 'snake.set'(sql, g, user, { roundId, gameId, hole, putts }, ctx) {
+    await requireRound(sql, roundId, g, ctx);
+    const list = putts == null ? [] : Array.isArray(putts) && putts.length <= 8 ? putts : bad('snake putts');
+    const value = list.map((e) => ({ p: str(e?.p, 'snake.p'), n: e.n >= 4 ? 4 : 3 }));
+    await setGameHole(sql, g, roundId, str(gameId, 'gameId'), 'snake', 'snakes', hole, value.length ? value : null);
     ctx.touched.add(roundId);
   },
 
