@@ -84,18 +84,29 @@ export function netScore(gross, strokes, si) {
 
 // ---------- Matches ----------
 
-function sideScore(round, ids, strokes, h, scoring) {
+/**
+ * A side's score on a hole: the sum of its nets ('aggregate'), or its `ball`-th best
+ * net (best ball is ball 1; side v side games can also bet the 2nd, 3rd... ball).
+ */
+function sideScore(round, ids, strokes, h, scoring, ball = 1) {
   const nets = ids.map((id) => netScore(round.scores[id]?.[h], strokes[id], round.course.si[h]));
   if (nets.some((n) => n == null)) return null;
-  return scoring === 'aggregate' ? sum(nets) : Math.min(...nets);
+  if (scoring === 'aggregate') return sum(nets);
+  return nets.sort((x, y) => x - y)[ball - 1] ?? null;
+}
+
+const ORDINALS = ['Best', '2nd', '3rd', '4th', '5th', '6th'];
+/** "Best ball", "2nd ball", "Aggregate". */
+export function ballLabel(match) {
+  return match.scoring === 'aggregate' ? 'Aggregate' : `${ORDINALS[(match.ball || 1) - 1]} ball`;
 }
 
 export function holeResults(round, match) {
   const strokes = matchStrokes(round, match);
   const out = [];
   for (let h = 0; h < 18; h++) {
-    const a = sideScore(round, match.a, strokes, h, match.scoring);
-    const b = sideScore(round, match.b, strokes, h, match.scoring);
+    const a = sideScore(round, match.a, strokes, h, match.scoring, match.ball);
+    const b = sideScore(round, match.b, strokes, h, match.scoring, match.ball);
     out.push(a == null || b == null ? null : a < b ? 1 : a > b ? -1 : 0);
   }
   return out;
@@ -207,7 +218,11 @@ export function pressOption(round, computed, segKey) {
 
 // ---------- Matches from a format ----------
 
-export function buildMatches(format, playerIds, teams, scoring = 'bestball', custom = [], wheel = []) {
+/**
+ * `balls` (teams, best ball, 2+ a side): which balls are bet, e.g. [1, 2] for best
+ * ball and second ball. Each is its own match, so its own Nassau and presses.
+ */
+export function buildMatches(format, playerIds, teams, scoring = 'bestball', custom = [], wheel = [], balls = [1]) {
   if (format === 'wheel') {
     // The wheel team (a fixed pair) plays every pair made from the other players.
     const pair = wheel.filter((id) => playerIds.includes(id));
@@ -230,7 +245,9 @@ export function buildMatches(format, playerIds, teams, scoring = 'bestball', cus
     const a = playerIds.filter((id) => teams[id] === 'a');
     const b = playerIds.filter((id) => teams[id] === 'b');
     if (!a.length || !b.length) return [];
-    return [{ id: 'teams', a, b, scoring }];
+    const most = Math.min(a.length, b.length);
+    const bet = scoring === 'aggregate' || most < 2 ? [1] : [...new Set(balls)].filter((n) => n >= 1 && n <= most).sort((x, y) => x - y);
+    return bet.map((n) => (n === 1 ? { id: 'teams', a, b, scoring } : { id: `teams-ball${n}`, a, b, scoring, ball: n }));
   }
   return custom.filter((m) => m.a.length && m.b.length);
 }

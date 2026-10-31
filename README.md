@@ -2,7 +2,7 @@
 
 A phone-first app for golf money games, starting with the Nassau.
 
-- Teams (best ball or aggregate), the wheel, everyone-vs-everyone, or custom matches, for 2–5 players
+- Teams (best ball or aggregate; side v side games can also bet the 2nd, 3rd… ball, each its own Nassau), the wheel, everyone-vs-everyone, or custom matches, for 2–8 players
 - Net or gross with allowances, strokes off the low man, low in group, or full
 - Manual presses, N-down auto presses (presses on presses), press limits, pressing the overall
 - Multiple tees per course; live hole-by-hole scoring, scorecard, bet ribbons, running day net, and settle-up

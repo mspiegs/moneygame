@@ -55,6 +55,13 @@ function Avatar({ p, size = '' }) {
 function sideNames(round, ids) {
   return ids.map((id) => first(round.players.find((p) => p.id === id).name)).join(' & ');
 }
+/** Short name for a side: "MAT/BOB", or "MAT+3" for a side of 3 or more. */
+function sideTag(round, ids) {
+  const names = sideNames(round, ids).split(' & ').map((n) => n.slice(0, 3).toUpperCase());
+  return names.length > 2 ? `${names[0]}+${names.length - 1}` : names.join('/');
+}
+/** "Best ball", "2nd ball"... when it tells this match apart from others with the same sides. */
+const ballChip = (m) => (m.ball || (m.scoring === 'bestball' && [...m.a, ...m.b].length > 2 && /(^|:)teams$/.test(m.id)) ? N.ballLabel(m) : null);
 
 // ---------- Data: sample group + persistence ----------
 const SAMPLE_COURSE = {
@@ -1013,7 +1020,7 @@ function Courses({ state, dispatch }) {
 }
 
 // ---------- New round setup ----------
-const MAX_PLAYERS = 5;
+const MAX_PLAYERS = 8;
 
 function Setup({ state, dispatch, go, user }) {
   const [step, setStep] = useState(0);
@@ -1024,7 +1031,7 @@ function Setup({ state, dispatch, go, user }) {
   const [teeId, setTeeId] = useState(courses[0]?.lastTee);
   // Each Nassau keeps its own settings and matches. The first becomes round.game; the rest
   // are saved as side games. customDraft is the custom match being built, before "Add".
-  const newNassau = (format) => ({ id: uid('ns-'), game: { ...N.defaultGame(), format }, teams: {}, wheel: [], scoring: 'bestball', custom: [], customDraft: null });
+  const newNassau = (format) => ({ id: uid('ns-'), game: { ...N.defaultGame(), format }, teams: {}, wheel: [], scoring: 'bestball', balls: [1], custom: [], customDraft: null });
   const [nassaus, setNassaus] = useState(() => [newNassau('teams')]);
   const setN = (id, patch) => setNassaus((ns) => ns.map((n) => (n.id === id ? { ...n, ...patch } : n)));
 
@@ -1048,8 +1055,10 @@ function Setup({ state, dispatch, go, user }) {
   };
 
   // Default teams and format follow the group size (for the first Nassau; extra ones stay Custom).
-  const groupFormat = (n) => (n === 4 || n === 2 ? 'teams' : n === 5 ? 'wheel' : 'roundrobin');
-  const defaultTeams = () => Object.fromEntries(ids.map((id, i) => [id, ids.length === 4 ? (i === 0 || i === 3 ? 'a' : 'b') : i % 2 === 0 ? 'a' : 'b']));
+  // 6+ players is usually group v group: the first half (in tee order) against the rest.
+  const groupFormat = (n) => (n === 4 || n === 2 || n >= 6 ? 'teams' : n === 5 ? 'wheel' : 'roundrobin');
+  const defaultTeams = () => Object.fromEntries(ids.map((id, i) => [id,
+    ids.length === 4 ? (i === 0 || i === 3 ? 'a' : 'b') : ids.length >= 6 ? (i < Math.ceil(ids.length / 2) ? 'a' : 'b') : i % 2 === 0 ? 'a' : 'b']));
   useEffect(() => {
     setNassaus((ns) => ns.map((n, i) => ({
       ...n, teams: defaultTeams(), wheel: ids.slice(0, 2), custom: [], customDraft: null,
@@ -1059,7 +1068,7 @@ function Setup({ state, dispatch, go, user }) {
   }, [ids.join()]);
 
   const nassauMatches = useMemo(() => nassaus.map((n) =>
-    N.buildMatches(n.game.format, ids, n.teams, n.scoring, n.customDraft ? [...n.custom, n.customDraft] : n.custom, n.wheel)), [nassaus, ids.join()]);
+    N.buildMatches(n.game.format, ids, n.teams, n.scoring, n.customDraft ? [...n.custom, n.customDraft] : n.custom, n.wheel, n.balls)), [nassaus, ids.join()]);
   const matchCount = nassauMatches.reduce((t, m) => t + m.length, 0);
   const draftRound = course && { course, players: selected, scores: {}, game: { ...(nassaus[0]?.game ?? N.defaultGame()), matches: nassauMatches[0] ?? [] }, sideGames };
   const sideOk = sideGames.every((g) => g.players.length === 3 && g.players.every((id) => ids.includes(id)));
@@ -1204,7 +1213,7 @@ function Setup({ state, dispatch, go, user }) {
             onRemove=${() => { setNassaus(nassaus.filter((x) => x.id !== n.id)); setOpenGame(null); }}>
             <${GameSetup} round=${{ ...draftRound, game: { ...n.game, matches: nassauMatches[i] } }} game=${n.game} setGame=${(g) => setN(n.id, { game: g })}
               ids=${ids} players=${selected} teams=${n.teams} setTeams=${(t) => setN(n.id, { teams: t })} wheel=${n.wheel} setWheel=${(w) => setN(n.id, { wheel: w })}
-              scoring=${n.scoring} setScoring=${(v) => setN(n.id, { scoring: v })} custom=${n.custom} setCustom=${(c) => setN(n.id, { custom: c })}
+              scoring=${n.scoring} setScoring=${(v) => setN(n.id, { scoring: v })} balls=${n.balls} setBalls=${(b) => setN(n.id, { balls: b })} custom=${n.custom} setCustom=${(c) => setN(n.id, { custom: c })}
               customDraft=${n.customDraft} setCustomDraft=${(d) => setN(n.id, { customDraft: d })} matches=${nassauMatches[i]} />
           </${GameCard}>`)}
           ${sideGames.map((g, i) => html`<${GameCard} title=${sideGames.length > 1 ? `9 Point ${i + 1}` : '9 Point'}
@@ -1297,7 +1306,8 @@ function nassauSummary(game, matches) {
   return [
     `$${same ? st.front : `${st.front}-${st.back}-${st.overall}`}`,
     FORMAT_LABELS[game.format],
-    `${matches.length} ${matches.length === 1 ? 'match' : 'matches'}`,
+    matches.some((m) => m.ball) ? matches.map((m) => N.ballLabel(m).replace(' ball', '')).join(' + ') + ' ball'
+      : `${matches.length} ${matches.length === 1 ? 'match' : 'matches'}`,
     game.handicap.mode === 'gross' ? 'gross' : `net${game.handicap.allowance !== 100 ? ` ${game.handicap.allowance}%` : ''}`,
     game.autoPress.enabled ? `${game.autoPress.down}-down autos` : 'no autos',
   ].join(' · ');
@@ -1350,7 +1360,7 @@ function NinePointSetup({ round, g, players, onChange, onRemove }) {
   </div>`;
 }
 
-function GameSetup({ round, game, setGame, ids, players, teams, setTeams, wheel, setWheel, scoring, setScoring, custom, setCustom, customDraft, setCustomDraft, matches }) {
+function GameSetup({ round, game, setGame, ids, players, teams, setTeams, wheel, setWheel, scoring, setScoring, balls = [1], setBalls, custom, setCustom, customDraft, setCustomDraft, matches }) {
   const upd = (patch) => setGame({ ...game, ...patch });
   const st = game.stakes;
   const same = st.front === st.back && st.back === st.overall;
@@ -1388,6 +1398,18 @@ function GameSetup({ round, game, setGame, ids, players, teams, setTeams, wheel,
         ${matches[0] && (matches[0].a.length > 1 || matches[0].b.length > 1) && html`<div class="opt-sub" style="padding-top:12px">
           <${Seg} value=${scoring} onChange=${setScoring} options=${[{ value: 'bestball', label: 'Best ball' }, { value: 'aggregate', label: 'Aggregate' }]} />
         </div>`}
+        ${(() => {
+          // Side v side, 2+ a side: bet the best ball, and optionally the 2nd, 3rd... ball too.
+          const most = Math.min(...['a', 'b'].map((t) => players.filter((p) => teams[p.id] === t).length));
+          if (scoring !== 'bestball' || most < 2) return null;
+          const on = (n) => matches.some((m) => (m.ball || 1) === n);
+          const flip = (n) => { const next = on(n) ? balls.filter((x) => x !== n) : [...balls, n]; if (next.some((x) => x <= most)) setBalls(next); };
+          return html`<div class="opt-sub" style="padding-top:12px">
+            <div class="note" style="margin-bottom:8px;font-weight:700">Bets on each hole</div>
+            <div class="chips">${Array.from({ length: Math.min(most, 4) }, (_, i) => html`<button type="button" class="chip" aria-pressed=${on(i + 1)} onClick=${() => flip(i + 1)}>${N.ballLabel({ ball: i + 1 })}</button>`)}</div>
+            ${matches.length > 1 && html`<p class="note" style="margin:8px 0 0">Each ball is its own Nassau with its own presses.</p>`}
+          </div>`;
+        })()}
         ${matches[0] && matches[0].a.length !== matches[0].b.length && html`<div class="opt-sub note">Uneven sides: each winner collects the stake and the losing side splits the total.</div>`}
         ${players.some((p) => !teams[p.id]) && matches.length > 0 && html`<div class="opt-sub note">${players.filter((p) => !teams[p.id]).map((p) => first(p.name)).join(', ')} ${players.filter((p) => !teams[p.id]).length === 1 ? 'sits' : 'sit'} out of the Nassau.</div>`}
         ${!matches.length && html`<div class="opt-sub note neg">Each side needs at least one player.</div>`}
@@ -1530,7 +1552,7 @@ function Pops({ n }) {
 }
 
 function BetLine({ b, round, match }) {
-  const who = b.leader ? sideNames(round, match[b.leader]).split(' & ').map((n) => n.slice(0, 3).toUpperCase()).join('/') : '';
+  const who = b.leader ? sideTag(round, match[b.leader]) : '';
   const cls = b.leader ? `c-${b.leader}` : 'c-n';
   const st = b.started ? b.status.replace('Won ', '') : `#${b.start + 1}`;
   if (b.kind !== 'main') return html`<div class=${`bet-line press ${cls}`}><svg class="flag-ic" viewBox="0 0 24 24" fill="currentColor"><path d="M6 2.5a1 1 0 0 1 1 1V4l11.2 4.3a.8.8 0 0 1 0 1.5L7 14v7.5a1 1 0 1 1-2 0v-18a1 1 0 0 1 1-1z"/></svg>${st}</div>`;
@@ -1548,8 +1570,8 @@ const nassauStakes = (g) => (g.stakes.front === g.stakes.back && g.stakes.back =
 function MatchCard({ round, c, dispatch, compact }) {
   const m = c.match;
   return html`<div class="card match">
-    <div class="match-head"><span class="sa">${sideNames(round, m.a)}</span><span class="vs">vs</span><span class="sb">${sideNames(round, m.b)}</span>
-      <span style="margin-left:auto" class="note">${c.thru ? `thru ${c.thru}` : ''}</span></div>
+    <div class="match-head" style="flex-wrap:wrap"><span class="sa">${sideNames(round, m.a)}</span><span class="vs">vs</span><span class="sb">${sideNames(round, m.b)}</span>
+      <span style="margin-left:auto" class="note">${[ballChip(m), c.thru ? `thru ${c.thru}` : ''].filter(Boolean).join(' · ')}</span></div>
     <div class="segs">
       ${c.segments.map((s) => {
         const opt = N.pressOption(round, c, s.key);
@@ -1684,7 +1706,7 @@ function CardTab({ round, data, dispatch }) {
           const ran = c.results.map((r) => (r == null ? null : (run += r)));
           const label = (i) => { const v = ran[i]; if (v == null) return ''; return v === 0 ? 'AS' : `${Math.abs(v)}`; };
           return html`<tr>
-            <td class="stick" style="font-size:12px"><span class="c-a">${sideNames(round, c.match.a).split(' & ').map((n) => n[0]).join('')}</span> <span class="c-n">v</span> <span class="c-b">${sideNames(round, c.match.b).split(' & ').map((n) => n[0]).join('')}</span></td>
+            <td class="stick" style="font-size:12px"><span class="c-a">${sideNames(round, c.match.a).split(' & ').map((n) => n[0]).join('')}</span> <span class="c-n">v</span> <span class="c-b">${sideNames(round, c.match.b).split(' & ').map((n) => n[0]).join('')}</span>${ballChip(c.match) && data.matches.some((x) => x.match.ball) ? html` <span class="c-n">${ballChip(c.match).replace(' ball', '')}</span>` : ''}</td>
             ${cells((i) => html`<td class="res"><span class=${ran[i] > 0 ? 'c-a' : ran[i] < 0 ? 'c-b' : 'c-n'}>${label(i)}</span></td>`, () => '')}
             <td class="tot"></td><td class="tot"></td>
           </tr>`;
@@ -1757,12 +1779,14 @@ function DayTotal({ round, data }) {
     <div class="board-rows">${ranked.map((p) => {
       const parts = data.matches.filter((c) => c.match.a.includes(p.id) || c.match.b.includes(p.id)).map((c) => ({
         v: c.net[p.id] || 0,
-        vs: sideNames(round, c.match.a.includes(p.id) ? c.match.b : c.match.a).split(' & ').map((n) => n[0]).join(''),
-      })).concat(data.side.filter((r) => r.game.players.includes(p.id)).map((r) => ({ v: r.money[p.id] || 0, vs: '9 Pt' })));
+        // Group v group: name the ball ("2nd ball"), since every match is against the same side.
+        what: c.match.ball || (ballChip(c.match) && data.matches.some((x) => x !== c && x.match.ball)) ? ballChip(c.match)
+          : `v ${sideNames(round, c.match.a.includes(p.id) ? c.match.b : c.match.a).split(' & ').map((n) => n[0]).join('')}`,
+      })).concat(data.side.filter((r) => r.game.players.includes(p.id)).map((r) => ({ v: r.money[p.id] || 0, what: 'v 9 Pt' })));
       return html`<div class="board-row" style="grid-template-columns:minmax(0,1fr) auto">
         <div style="min-width:0">
           <div class="pname">${first(p.name)}</div>
-          <div class="parts">${parts.map((x) => html`<span><i>v ${x.vs}</i> <b class=${x.v < 0 ? 'down' : ''}>${money(x.v)}</b></span>`)}</div>
+          <div class="parts">${parts.map((x) => html`<span><i>${x.what}</i> <b class=${x.v < 0 ? 'down' : ''}>${money(x.v)}</b></span>`)}</div>
         </div>
         <span class=${`tile ${data.projected[p.id] < 0 ? 'down' : 'up'}`} style="min-width:84px">${money(data.projected[p.id])}</span>
       </div>`;
@@ -1783,19 +1807,19 @@ function BetsTab({ round, data, dispatch }) {
           <div class="match-head" style="flex-wrap:wrap"><span class="sa">${sideNames(round, m.a)}</span><span class="vs">vs</span><span class="sb">${sideNames(round, m.b)}</span></div>
           <div class="chips">
             ${[...m.a, ...m.b].map((id) => html`<span class="strokes-chip"><span class=${m.a.includes(id) ? 'c-a' : 'c-b'}>${first(round.players.find((p) => p.id === id).name)}</span> · ${c.strokes[id]} ${c.strokes[id] === 1 ? 'stroke' : 'strokes'}</span>`)}
-            ${[...m.a, ...m.b].length > 2 && html`<span class="strokes-chip">${m.scoring === 'aggregate' ? 'Aggregate' : 'Best ball'}</span>`}
+            ${[...m.a, ...m.b].length > 2 && html`<span class="strokes-chip">${N.ballLabel(m)}</span>`}
           </div>
           ${c.segments.map((s) => {
             const opt = N.pressOption(rv, c, s.key);
             return html`<div>
               <div class="section-head" style="margin-top:4px"><h2>${s.label} · $${rv.game.stakes[s.key]}</h2>
-                ${opt && html`<button type="button" class="press-btn" style="margin:0" onClick=${() => dispatch({ type: 'addPress', roundId: round.id, press: { id: uid('pr-'), matchId: m.id, segment: s.key, start: opt.start, by: opt.side } })}>${I.flag} ${sideNames(round, m[opt.side]).split(' & ').map((x) => x).join(' & ')} press</button>`}
+                ${opt && html`<button type="button" class="press-btn" style="margin:0" onClick=${() => dispatch({ type: 'addPress', roundId: round.id, press: { id: uid('pr-'), matchId: m.id, segment: s.key, start: opt.start, by: opt.side } })}>${I.flag} ${m[opt.side].length > 2 ? sideTag(round, m[opt.side]) : sideNames(round, m[opt.side])} press</button>`}
               </div>
               ${s.bets.map((b) => html`<div class="bet">
                 <div class="bet-top">
                   <span class="t">${b.kind !== 'main' && html`<svg class="flag-ic" viewBox="0 0 24 24" fill="currentColor"><path d="M6 2.5a1 1 0 0 1 1 1V4l11.2 4.3a.8.8 0 0 1 0 1.5L7 14v7.5a1 1 0 1 1-2 0v-18a1 1 0 0 1 1-1z"/></svg>`}
                     ${b.label}<small>${b.kind === 'main' ? `holes ${s.start + 1}–${s.end + 1}` : `${b.kind === 'auto' ? 'auto' : sideNames(round, m[b.by])} from #${b.start + 1}`}</small></span>
-                  <span class=${`pill ${b.leader ?? 'n'}`}>${b.leader ? `${sideNames(round, m[b.leader]).split(' & ').map((n) => n.slice(0, 3)).join('/')} ` : ''}${b.status}</span>
+                  <span class=${`pill ${b.leader ?? 'n'}`}>${b.leader ? `${sideTag(round, m[b.leader])} ` : ''}${b.status}</span>
                   ${b.kind === 'manual' && !b.started && html`<button type="button" class="x-btn" aria-label="Cancel press" onClick=${() => dispatch({ type: 'removePress', roundId: round.id, pressId: b.id })}>${I.x}</button>`}
                 </div>
                 <${Ribbon} b=${b} seg=${s} />
@@ -1854,7 +1878,8 @@ function SettleTab({ round, data, dispatch, go, toast }) {
       <div class="card rows">${data.matches.map((c) => {
         const bets = c.segments.flatMap((s) => s.bets.filter((b) => b.started));
         return html`<div style="padding:14px 16px;display:flex;flex-direction:column;gap:8px">
-          <div class="match-head"><span class="sa">${sideNames(round, c.match.a)}</span><span class="vs">vs</span><span class="sb">${sideNames(round, c.match.b)}</span></div>
+          <div class="match-head" style="flex-wrap:wrap"><span class="sa">${sideNames(round, c.match.a)}</span><span class="vs">vs</span><span class="sb">${sideNames(round, c.match.b)}</span>
+            ${ballChip(c.match) && html`<span class="note" style="margin-left:auto">${ballChip(c.match)}</span>`}</div>
           ${bets.map((b) => html`<div style="display:flex;justify-content:space-between;gap:8px;font-size:13.5px">
             <span>${N.SEGMENTS[b.segment].label}${b.kind !== 'main' ? ` · ${b.label}` : ''} <span class="note">$${b.stake}</span></span>
             <span class=${b.leader ? `c-${b.leader}` : 'c-n'} style="font-weight:750">${b.leader ? `${sideNames(round, c.match[b.leader])} ` : ''}${b.status}</span>
