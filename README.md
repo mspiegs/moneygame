@@ -2,6 +2,8 @@
 
 A phone-first app for golf money games, starting with the Nassau.
 
+- Vegas for 2 v 2: birdie flips, 10+ goes first or counts as 9, switch partners every 6, per-hole cap
+- Hammer for 1 v 1 or 2 v 2: hammer back, fold, first hammer rules, per-hole limit, carryovers, birdies double
 - Wolf for 3–5 players: partner, lone or blind wolf, carryovers, birdies double, trailing wolf on the last holes
 - Teams (best ball or aggregate; side v side games can also bet the 2nd, 3rd… ball, each its own Nassau), the wheel, everyone-vs-everyone, or custom matches, for 2–8 players
 - Net or gross with allowances, strokes off the low man, low in group, or full

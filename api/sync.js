@@ -16,6 +16,22 @@ import { canSeeRound, refreshLedger } from './_lib/rounds.js';
 const MAX_OPS = 500;
 
 const bad = (msg) => { throw new HttpError(400, msg); };
+/**
+ * Sets (or with null, clears) one hole's entry in a side game's per-hole map, e.g. a Wolf
+ * game's picks. Only that hole changes, so two phones on different holes can't clobber each other.
+ */
+async function setGameHole(sql, g, roundId, gameId, type, field, hole, value) {
+  const h = String(int(hole, 'hole', 0, 17));
+  const v = value == null ? null : JSON.stringify(value);
+  await sql`update rounds set updated_at = now(), side_games = (
+      select jsonb_agg(case when e->>'id' = ${gameId} and e->>'type' = ${type}
+        then jsonb_set(e, array[${field}], case when ${v}::jsonb is null then coalesce(e->${field}, '{}') - ${h}
+          else coalesce(e->${field}, '{}') || jsonb_build_object(${h}::text, ${v}::jsonb) end)
+        else e end order by i)
+      from jsonb_array_elements(side_games) with ordinality as t(e, i))
+    where id = ${roundId} and group_id = ${g} and jsonb_array_length(side_games) > 0`;
+}
+
 const str = (v, name) => (typeof v === 'string' && v.length > 0 && v.length <= 200 ? v : bad(`${name} is required`));
 const int = (v, name, min, max) => (Number.isInteger(v) && v >= min && v <= max ? v : bad(`${name} must be ${min}–${max}`));
 const numOrNull = (v, name) => (v == null ? null : Number.isFinite(v) ? v : bad(`${name} must be a number`));
@@ -109,6 +125,15 @@ const handlers = {
         if (!Array.isArray(g.players) || g.players.length < 3 || g.players.length > 5 || g.players.some((p) => !ids.includes(p))) bad('Wolf needs 3 to 5 of the round\u2019s players');
         if (!(Number.isFinite(g.stake) && g.stake >= 0 && g.stake <= 10000)) bad('Wolf stake must be 0-10,000');
         if (![g.lone, g.blind].every((m) => Number.isInteger(m) && m >= 0 && m <= 10)) bad('Wolf multipliers must be 0-10');
+      } else if (g?.type === 'hammer') {
+        if (typeof g.id !== 'string' || !g.id) bad('Hammer needs an id');
+        const sides = [g.a, g.b];
+        if (!sides.every((s) => Array.isArray(s) && s.length >= 1 && s.length <= 2 && s.every((p) => ids.includes(p))) || g.a.length !== g.b.length
+          || new Set([...g.a, ...g.b]).size !== g.a.length * 2) bad('Hammer needs two even sides of the round\u2019s players');
+        if (!(Number.isFinite(g.stake) && g.stake >= 0 && g.stake <= 10000)) bad('Hammer stake must be 0-10,000');
+      } else if (g?.type === 'vegas') {
+        if (![g.a, g.b].every((t) => Array.isArray(t) && t.length === 2 && t.every((p) => ids.includes(p))) || new Set([...g.a, ...g.b]).size !== 4) bad('Vegas needs two teams of 2 of the round\u2019s players');
+        if (!(Number.isFinite(g.stake) && g.stake > 0 && g.stake <= 1000)) bad('Vegas stake must be up to 1,000 a point');
       } else if (g?.type === 'nassau') {
         // An extra Nassau with its own settings; match ids are prefixed with the game id.
         if (!Array.isArray(g.matches) || g.matches.length > 20) bad('Nassau matches missing');
@@ -212,16 +237,16 @@ const handlers = {
   /** The wolf's call on one hole of a Wolf game: a partner's id, 'lone' or 'blind' (null clears it). */
   async 'wolf.pick'(sql, g, user, { roundId, gameId, hole, pick }, ctx) {
     await requireRound(sql, roundId, g, ctx);
-    const h = String(int(hole, 'hole', 0, 17));
-    const value = pick == null ? null : str(pick, 'pick');
-    // Only this hole's pick in this game changes, so two phones picking on different holes can't clobber each other.
-    await sql`update rounds set updated_at = now(), side_games = (
-        select jsonb_agg(case when e->>'id' = ${str(gameId, 'gameId')} and e->>'type' = 'wolf'
-          then jsonb_set(e, '{picks}', case when ${value}::text is null then coalesce(e->'picks', '{}') - ${h}
-            else coalesce(e->'picks', '{}') || jsonb_build_object(${h}::text, ${value}::text) end)
-          else e end order by i)
-        from jsonb_array_elements(side_games) with ordinality as t(e, i))
-      where id = ${roundId} and group_id = ${g} and jsonb_array_length(side_games) > 0`;
+    await setGameHole(sql, g, roundId, str(gameId, 'gameId'), 'wolf', 'picks', hole, pick == null ? null : str(pick, 'pick'));
+    ctx.touched.add(roundId);
+  },
+
+  /** The hammers thrown on one hole of a Hammer game: { by, n, declined } (null clears it). */
+  async 'hammer.set'(sql, g, user, { roundId, gameId, hole, throws: t }, ctx) {
+    await requireRound(sql, roundId, g, ctx);
+    const value = t == null ? null
+      : { by: t.by === 'a' || t.by === 'b' ? t.by : bad('hammer.by'), n: int(t.n, 'hammer.n', 1, 20), declined: !!t.declined };
+    await setGameHole(sql, g, roundId, str(gameId, 'gameId'), 'hammer', 'hammers', hole, value);
     ctx.touched.add(roundId);
   },
 

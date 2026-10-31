@@ -3,6 +3,8 @@ import * as N from './nassau.js';
 import * as G from './games.js';
 import * as NP from './ninepoint.js';
 import * as W from './wolf.js';
+import * as HM from './hammer.js';
+import * as VG from './vegas.js';
 import * as A from './auth.js';
 import { API_BASE } from './config.js';
 import { scanScorecard } from './camera.js';
@@ -17,6 +19,7 @@ const I = {
   minus: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 12h14"/></svg>`,
   check: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>`,
   x: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>`,
+  hammer: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 9.5L4 20"/><path d="M9.5 4.5l3-1.5 8.5 8.5-1.5 3z"/><path d="M12.5 3l-4 4 8.5 8.5 4-4"/></svg>`,
   flag: html`<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 2.5a1 1 0 0 1 1 1V4l11.2 4.3a.8.8 0 0 1 0 1.5L7 14v7.5a1 1 0 1 1-2 0v-18a1 1 0 0 1 1-1z"/></svg>`,
   flagO: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M6 21V3.5M6 4.5l11.5 4.5L6 13.5"/></svg>`,
   card: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M3 10h18M9 10v9M15 10v9"/></svg>`,
@@ -197,6 +200,15 @@ function reducer(s, a) {
     case 'setHole': return mapRound((r) => ({ ...r, hole: a.hole }));
     case 'addPress': return mapRound((r) => ({ ...r, presses: [...r.presses, a.press] }));
     case 'removePress': return mapRound((r) => ({ ...r, presses: r.presses.filter((p) => p.id !== a.pressId) }));
+    case 'hammerSet': return mapRound((r) => ({
+      ...r, sideGames: r.sideGames.map((g) => {
+        if (g.id !== a.gameId) return g;
+        const hammers = { ...g.hammers };
+        if (a.throws == null) delete hammers[a.hole];
+        else hammers[a.hole] = a.throws;
+        return { ...g, hammers };
+      }),
+    }));
     case 'wolfPick': return mapRound((r) => ({
       ...r, sideGames: r.sideGames.map((g) => {
         if (g.id !== a.gameId) return g;
@@ -1074,14 +1086,17 @@ function Setup({ state, dispatch, go, user }) {
       ...n, teams: defaultTeams(), wheel: ids.slice(0, 2), custom: [], customDraft: null,
       game: i === 0 ? { ...n.game, format: groupFormat(ids.length) } : n.game,
     })));
-    setSideGames((gs) => gs.map((g) => ({ ...g, players: g.players.filter((id) => ids.includes(id)) })));
+    setSideGames((gs) => gs.map((g) => (g.a
+      ? { ...g, a: g.a.filter((id) => ids.includes(id)), b: g.b.filter((id) => ids.includes(id)) }
+      : { ...g, players: g.players.filter((id) => ids.includes(id)) })));
   }, [ids.join()]);
 
   const nassauMatches = useMemo(() => nassaus.map((n) =>
     N.buildMatches(n.game.format, ids, n.teams, n.scoring, n.customDraft ? [...n.custom, n.customDraft] : n.custom, n.wheel, n.balls)), [nassaus, ids.join()]);
   const matchCount = nassauMatches.reduce((t, m) => t + m.length, 0);
   const draftRound = course && { course, players: selected, scores: {}, game: { ...(nassaus[0]?.game ?? N.defaultGame()), matches: nassauMatches[0] ?? [] }, sideGames };
-  const sideOk = sideGames.every((g) => (g.type === 'wolf' ? g.players.length >= 3 : g.players.length === 3) && g.players.every((id) => ids.includes(id)));
+  const sideOk = sideGames.every((g) => (g.type === 'hammer' ? HM.sidesOk(g) : g.type === 'vegas' ? VG.sidesOk(g)
+    : (g.type === 'wolf' ? g.players.length >= 3 : g.players.length === 3) && g.players.every((id) => ids.includes(id))));
   const gamesOk = nassaus.length + sideGames.length > 0 && nassauMatches.every((m) => m.length > 0) && sideOk;
 
   const canNext = [ids.length >= 2, !!course, gamesOk][step];
@@ -1110,7 +1125,7 @@ function Setup({ state, dispatch, go, user }) {
   };
   const back = () => (step === 0 ? go({ view: 'home' }) : setStep(step - 1));
 
-  const titles = [["Who's playing?", scan ? 'Match each row on the card to a player, or add them.' : card ? 'The players on your scorecard.' : `Pick 2 to ${MAX_PLAYERS} players. Tap in tee order.`], ['Where to?', 'Pick the course, then the tees you are playing.'], ['Set the games', 'A Nassau, 9 Point, Wolf, or a mix. Each game keeps its own score and money.']];
+  const titles = [["Who's playing?", scan ? 'Match each row on the card to a player, or add them.' : card ? 'The players on your scorecard.' : `Pick 2 to ${MAX_PLAYERS} players. Tap in tee order.`], ['Where to?', 'Pick the course, then the tees you are playing.'], ['Set the games', 'Mix and match Nassaus, 9 Point, Wolf, Hammer and Vegas. Each game keeps its own score and money.']];
 
   return html`<div class="app">
     <header class="topbar">
@@ -1233,6 +1248,20 @@ function Setup({ state, dispatch, go, user }) {
             onRemove=${() => { setSideGames(sideGames.filter((x) => x.id !== g.id)); setOpenGame(null); }}>
             <${WolfSetup} round=${draftRound} g=${g} players=${selected} onChange=${(v) => setSideGames(sideGames.map((x) => (x.id === g.id ? v : x)))} />
           </${GameCard}>`)}
+          ${sideGames.filter((g) => g.type === 'hammer').map((g, i, all) => html`<${GameCard} title=${all.length > 1 ? `Hammer ${i + 1}` : 'Hammer'}
+            summary=${`${[g.a, g.b].map((s) => s.map((id) => first(selected.find((p) => p.id === id)?.name ?? '?')).join(' & ') || '?').join(' v ')} · ${HM.hammerSummary(g)}`}
+            problem=${!HM.sidesOk(g) && 'Set two even sides'}
+            open=${openGame === g.id} onToggle=${() => setOpenGame(openGame === g.id ? null : g.id)}
+            onRemove=${() => { setSideGames(sideGames.filter((x) => x.id !== g.id)); setOpenGame(null); }}>
+            <${HammerSetup} round=${draftRound} g=${g} players=${selected} onChange=${(v) => setSideGames(sideGames.map((x) => (x.id === g.id ? v : x)))} />
+          </${GameCard}>`)}
+          ${sideGames.filter((g) => g.type === 'vegas').map((g, i, all) => html`<${GameCard} title=${all.length > 1 ? `Vegas ${i + 1}` : 'Vegas'}
+            summary=${`${[g.a, g.b].map((s) => s.map((id) => first(selected.find((p) => p.id === id)?.name ?? '?')).join(' & ') || '?').join(' v ')} · ${VG.vegasSummary(g)}`}
+            problem=${!VG.sidesOk(g) && 'Put 2 players on each team'}
+            open=${openGame === g.id} onToggle=${() => setOpenGame(openGame === g.id ? null : g.id)}
+            onRemove=${() => { setSideGames(sideGames.filter((x) => x.id !== g.id)); setOpenGame(null); }}>
+            <${VegasSetup} round=${draftRound} g=${g} players=${selected} onChange=${(v) => setSideGames(sideGames.map((x) => (x.id === g.id ? v : x)))} />
+          </${GameCard}>`)}
           ${sideGames.filter((g) => g.type === 'ninepoint').map((g, i, all) => html`<${GameCard} title=${all.length > 1 ? `9 Point ${i + 1}` : '9 Point'}
             summary=${`${g.players.map((id) => first(selected.find((p) => p.id === id)?.name ?? '?')).join(', ')} · ${NP.ninePointSummary(g)}`}
             problem=${g.players.length !== 3 && `Pick 3 players (${g.players.length} picked)`}
@@ -1260,12 +1289,20 @@ function Setup({ state, dispatch, go, user }) {
               <span class="plus">${I.plus}</span><b>Wolf</b>
               <small>${ids.length < 3 ? 'Needs 3 players' : 'Pick a partner or go it alone, 3 to 5 players'}</small>
             </button>
+            <button type="button" class="add-game" onClick=${() => { const g = HM.defaultHammer(ids.length === 2 || ids.length === 4 ? ids : []); setSideGames([...sideGames, g]); setOpenGame(g.id); }}>
+              <span class="plus">${I.plus}</span><b>Hammer</b>
+              <small>Double the hole, take it or fold, 1 v 1 or 2 v 2</small>
+            </button>
+            <button type="button" class="add-game" disabled=${ids.length < 4} onClick=${() => { const g = VG.defaultVegas(ids.length === 4 ? ids : []); setSideGames([...sideGames, g]); setOpenGame(g.id); }}>
+              <span class="plus">${I.plus}</span><b>Vegas</b>
+              <small>${ids.length < 4 ? 'Needs 4 players' : 'Team scores as numbers: 4 and 5 make 45'}</small>
+            </button>
           </div>
         </div>
       `}
     </main>
     <div class="dock"><div class="dock-inner">
-      <span class="hint">${step === 0 ? `${ids.length} of ${MAX_PLAYERS} selected` : step === 1 ? course?.name ?? 'Pick a course' : [nassaus.length && `${matchCount} Nassau ${matchCount === 1 ? 'match' : 'matches'}`, ...[['ninepoint', '9 Point'], ['wolf', 'Wolf']].map(([t, label]) => { const n = sideGames.filter((g) => g.type === t).length; return n && (n > 1 ? `${n} × ${label}` : label); })].filter(Boolean).join(' + ') || 'No games'}</span>
+      <span class="hint">${step === 0 ? `${ids.length} of ${MAX_PLAYERS} selected` : step === 1 ? course?.name ?? 'Pick a course' : [nassaus.length && `${matchCount} Nassau ${matchCount === 1 ? 'match' : 'matches'}`, ...[['ninepoint', '9 Point'], ['wolf', 'Wolf'], ['hammer', 'Hammer'], ['vegas', 'Vegas']].map(([t, label]) => { const n = sideGames.filter((g) => g.type === t).length; return n && (n > 1 ? `${n} × ${label}` : label); })].filter(Boolean).join(' + ') || 'No games'}</span>
       <button type="button" class="btn primary" disabled=${!canNext} onClick=${next}>${step === 2 ? html`${I.flag} Tee off` : html`Next ${I.arrow}`}</button>
     </div></div>
   </div>`;
@@ -1378,6 +1415,114 @@ function NinePointSetup({ round, g, players, onChange, onRemove }) {
         { value: 'pairs', label: 'Pair by pair', sub: '60/54/48 pts → +18/0/−18' },
       ]} />
     </div>
+  </div>`;
+}
+
+/** Setup for one Vegas game: the two teams, the stake and house rules. */
+function VegasSetup({ round, g, players, onChange }) {
+  const upd = (patch) => onChange({ ...g, ...patch });
+  const sideOf = (id) => (g.a.includes(id) ? 'a' : g.b.includes(id) ? 'b' : undefined);
+  const setSide = (id, v) => upd({ a: [...g.a.filter((x) => x !== id), ...(v === 'a' ? [id] : [])], b: [...g.b.filter((x) => x !== id), ...(v === 'b' ? [id] : [])] });
+  const ok = VG.sidesOk(g);
+  const strokes = useMemo(() => (ok && round ? VG.vegasStrokes(round, g) : {}), [round, g]);
+  const name = (id) => first(players.find((p) => p.id === id)?.name ?? '?');
+  const pairings = ok && [0, 6, 12].map((h) => VG.teamsOn(g, h)).map((t) => `${t.a.map(name).join(' & ')} v ${t.b.map(name).join(' & ')}`);
+  return html`<div class="card np-setup">
+    <div class="rows">${players.map((p) => html`<div class="row" style="min-height:56px"><${Avatar} p=${p} size="sm" />
+      <div class="grow"><div class="name">${p.name}</div>${ok && sideOf(p.id) && g.handicap.mode === 'net' ? html`<div class="meta">${strokes[p.id] ?? 0} ${strokes[p.id] === 1 ? 'stroke' : 'strokes'}</div>` : ''}</div>
+      <${SideToggle} value=${sideOf(p.id)} allowOut onChange=${(v) => setSide(p.id, v)} /></div>`)}</div>
+    ${!ok && html`<div class="opt-sub note neg">Put 2 players on each team.</div>`}
+    <p class="opt-sub note" style="margin:0">Each team's scores make a number, low score first: a 4 and a 5 make 45. The lower number wins the difference in points, paid per man.</p>
+    <div class="opt-sub">
+      <div class="eyebrow" style="margin-bottom:8px">Per point</div>
+      <${Seg} value=${g.stake} onChange=${(v) => upd({ stake: v })} options=${[0.25, 0.5, 1, 2, 5].map((v) => ({ value: v, label: v < 1 ? `${v * 100}\u00a2` : `$${v}` }))} />
+    </div>
+    <${Opt} title="Birdies flip" desc="A birdie turns the other team's number around, high score first: 45 becomes 54. Both teams birdie: no flip.">
+      <${Switch} label="Birdies flip" on=${g.flip} onChange=${(v) => upd({ flip: v })} />
+    </${Opt}>
+    ${g.flip && g.handicap.mode === 'net' && html`<${Opt} title="Net birdies flip" desc="A net birdie flips too, not just a natural one">
+      <${Switch} label="Net birdies flip" on=${g.netBirdies} onChange=${(v) => upd({ netBirdies: v })} />
+    </${Opt}>`}
+    <div class="opt-sub">
+      <div class="eyebrow" style="margin-bottom:8px">Partners</div>
+      <${Seg} tall value=${g.partners} onChange=${(v) => upd({ partners: v })} options=${[
+        { value: 'fixed', label: 'Same all day', sub: 'teams as set' },
+        { value: 'sixes', label: 'Switch every 6', sub: 'everyone partners everyone' },
+      ]} />
+      ${g.partners === 'sixes' && pairings && html`<p class="note" style="margin:8px 0 0">1\u20136: ${pairings[0]}. 7\u201312: ${pairings[1]}. 13\u201318: ${pairings[2]}.</p>`}
+    </div>
+    <div class="opt-sub">
+      <div class="eyebrow" style="margin-bottom:8px">A score of 10 or more</div>
+      <${Seg} tall value=${g.bigScores} onChange=${(v) => upd({ bigScores: v })} options=${[
+        { value: 'first', label: 'Goes first', sub: '4 and 10 make 104' },
+        { value: 'nine', label: 'Counts as 9', sub: '4 and 10 make 49' },
+      ]} />
+    </div>
+    <div class="opt-sub">
+      <div class="eyebrow" style="margin-bottom:8px">Most points on a hole</div>
+      <${Seg} value=${g.cap} onChange=${(v) => upd({ cap: v })} options=${[{ value: 0, label: 'No limit' }, ...[20, 30, 50].map((v) => ({ value: v, label: `${v}` }))]} />
+    </div>
+    <div class="opt-sub"><${Seg} value=${g.handicap.mode} onChange=${(v) => upd({ handicap: { ...g.handicap, mode: v } })} options=${[{ value: 'net', label: 'Net' }, { value: 'gross', label: 'Gross' }]} /></div>
+    ${g.handicap.mode === 'net' && html`
+      <${Opt} title="Allowance" desc="Share of each course handicap used">
+        <${Stepper} label="Vegas allowance" value=${g.handicap.allowance} min=${50} max=${100} step=${5} format=${(v) => `${v}%`}
+          onChange=${(v) => upd({ handicap: { ...g.handicap, allowance: v } })} />
+      </${Opt}>
+      <div class="opt-sub"><${Seg} tall value=${g.handicap.strokesOff} onChange=${(v) => upd({ handicap: { ...g.handicap, strokesOff: v } })} options=${[
+        { value: 'match', label: 'Low man', sub: 'off the best player' },
+        { value: 'full', label: 'Full', sub: 'everyone' },
+      ]} /></div>`}
+  </div>`;
+}
+
+/** Setup for one Hammer game: the two sides, the hole's value and house rules. */
+function HammerSetup({ round, g, players, onChange }) {
+  const upd = (patch) => onChange({ ...g, ...patch });
+  const sideOf = (id) => (g.a.includes(id) ? 'a' : g.b.includes(id) ? 'b' : undefined);
+  const setSide = (id, v) => upd({ a: [...g.a.filter((x) => x !== id), ...(v === 'a' ? [id] : [])], b: [...g.b.filter((x) => x !== id), ...(v === 'b' ? [id] : [])] });
+  const ok = HM.sidesOk(g);
+  const strokes = useMemo(() => (ok && round ? HM.hammerStrokes(round, g) : {}), [round, g]);
+  return html`<div class="card np-setup">
+    <div class="rows">${players.map((p) => html`<div class="row" style="min-height:56px"><${Avatar} p=${p} size="sm" />
+      <div class="grow"><div class="name">${p.name}</div>${ok && sideOf(p.id) && g.handicap.mode === 'net' ? html`<div class="meta">${strokes[p.id] ?? 0} ${strokes[p.id] === 1 ? 'stroke' : 'strokes'}</div>` : ''}</div>
+      <${SideToggle} value=${sideOf(p.id)} allowOut onChange=${(v) => setSide(p.id, v)} /></div>`)}</div>
+    ${!ok && html`<div class="opt-sub note neg">Put 1 or 2 players on each side, the same number on both.</div>`}
+    <p class="opt-sub note" style="margin:0">Throwing the hammer doubles the hole. The other side takes it (and now holds the hammer) or folds and loses the hole at its value before that hammer.</p>
+    <${Opt} title="A hole is worth" desc="Per man, before any hammers">
+      <${Stepper} label="Dollars a hole" value=${g.stake} min=${1} max=${100} step=${1} format=${(v) => `$${v}`} onChange=${(v) => upd({ stake: v })} />
+    </${Opt}>
+    <div class="opt-sub">
+      <div class="eyebrow" style="margin-bottom:8px">First hammer on each hole</div>
+      <${Seg} tall value=${g.first} onChange=${(v) => upd({ first: v })} options=${[
+        { value: 'either', label: 'Either side', sub: 'first to swing' },
+        { value: 'behind', label: 'Side behind', sub: 'in this game' },
+        { value: 'lost', label: 'Lost last hole', sub: 'gets it next' },
+      ]} />
+    </div>
+    <div class="opt-sub">
+      <div class="eyebrow" style="margin-bottom:8px">Hammers per hole</div>
+      <${Seg} value=${g.max} onChange=${(v) => upd({ max: v })} options=${[{ value: 0, label: 'No limit' }, ...[1, 2, 3, 4].map((v) => ({ value: v, label: `${v}` }))]} />
+    </div>
+    <div class="opt-sub">
+      <div class="eyebrow" style="margin-bottom:8px">Tied holes</div>
+      <${Seg} tall value=${g.ties} onChange=${(v) => upd({ ties: v })} options=${[
+        { value: 'push', label: 'Push', sub: 'nobody wins' },
+        { value: 'carry', label: 'Carry over', sub: 'value adds to next hole' },
+      ]} />
+    </div>
+    <${Opt} title="Birdies double" desc="A natural birdie on the winning side doubles the hole">
+      <${Switch} label="Birdies double" on=${g.birdies} onChange=${(v) => upd({ birdies: v })} />
+    </${Opt}>
+    <div class="opt-sub"><${Seg} value=${g.handicap.mode} onChange=${(v) => upd({ handicap: { ...g.handicap, mode: v } })} options=${[{ value: 'net', label: 'Net' }, { value: 'gross', label: 'Gross' }]} /></div>
+    ${g.handicap.mode === 'net' && html`
+      <${Opt} title="Allowance" desc="Share of each course handicap used">
+        <${Stepper} label="Hammer allowance" value=${g.handicap.allowance} min=${50} max=${100} step=${5} format=${(v) => `${v}%`}
+          onChange=${(v) => upd({ handicap: { ...g.handicap, allowance: v } })} />
+      </${Opt}>
+      <div class="opt-sub"><${Seg} tall value=${g.handicap.strokesOff} onChange=${(v) => upd({ handicap: { ...g.handicap, strokesOff: v } })} options=${[
+        { value: 'match', label: 'Low man', sub: 'off the best player' },
+        { value: 'full', label: 'Full', sub: 'everyone' },
+      ]} /></div>`}
   </div>`;
 }
 
@@ -1705,7 +1850,7 @@ function ScoreTab({ round, data, dispatch, toast, onSettle }) {
       <button type="button" class="icon-btn" aria-label="Next hole" disabled=${h === 17} onClick=${() => setHole(h + 1)}>${I.next}</button>
     </div>
 
-    ${data.side.filter((r) => r.game.type === 'wolf').map((r) => html`<${WolfCard} round=${round} r=${r} hole=${h} dispatch=${dispatch} />`)}
+    ${data.side.filter((r) => r.game.type === 'wolf' || r.game.type === 'hammer').map((r) => html`<${SideCard} round=${round} r=${r} hole=${h} dispatch=${dispatch} />`)}
 
     <div class="card rows">
       ${round.players.map((p) => {
@@ -1736,7 +1881,7 @@ function ScoreTab({ round, data, dispatch, toast, onSettle }) {
       <div class="section-head"><h2>${nassauTitle(data, i)}</h2><span class="meta">${nassauStakes(n.game)} · ${n.game.autoPress.enabled ? `${n.game.autoPress.down}-down autos` : 'no auto presses'}</span></div>
       ${n.matches.map((c) => html`<${MatchCard} round=${c.view} c=${c} dispatch=${dispatch} compact />`)}
     </div>`)}
-    ${data.side.filter((r) => r.game.type !== 'wolf').map((r) => html`<${SideCard} round=${round} r=${r} hole=${h} />`)}
+    ${data.side.filter((r) => r.game.type === 'ninepoint' || r.game.type === 'vegas').map((r) => html`<${SideCard} round=${round} r=${r} hole=${h} />`)}
 
     <div class="fab-row"><div class="dock-inner">
       ${h < 17
@@ -1806,7 +1951,120 @@ function CardTab({ round, data, dispatch }) {
 
 /** A 9 Point game: points and money so far. `hole` highlights one hole (Score tab); `detail` adds the hole-by-hole grid (Bets tab). */
 /** A 9 Point or Wolf game's card. */
-const SideCard = (props) => (props.r.game.type === 'wolf' ? html`<${WolfCard} ...${props} />` : html`<${NinePointCard} ...${props} />`);
+const SideCard = (props) => {
+  const Card = { wolf: WolfCard, hammer: HammerCard, vegas: VegasCard }[props.r.game.type] ?? NinePointCard;
+  return html`<${Card} ...${props} />`;
+};
+/** Everyone in a side game. */
+const sidePlayers = (g) => g.players ?? [...g.a, ...g.b];
+
+/** Vegas: this hole's team numbers and points, standings, and with `detail` every hole. */
+function VegasCard({ round, r, hole, detail }) {
+  const g = r.game;
+  const n = (id) => first(round.players.find((p) => p.id === id)?.name ?? '?');
+  const team = (ids) => ids.map(n).join(' & ');
+  const pl = [...g.a, ...g.b].map((id) => round.players.find((p) => p.id === id)).filter(Boolean);
+  const ranked = [...pl].sort((a, b) => r.totals[b.id] - r.totals[a.id]);
+  const cur = hole != null ? r.holes[hole] : null;
+  const next = hole != null && !cur ? VG.teamsOn(g, hole) : null;
+  const holes = Array.from({ length: 18 }, (_, i) => i);
+  const nine = (st) => holes.slice(st, st + 9);
+  const won = (x, id) => (!x?.winner ? 0 : x[x.winner].includes(id) ? x.points : -x.points);
+  const part = (id, st) => nine(st).reduce((t, i) => t + won(r.holes[i], id), 0);
+  const side = (x, s) => html`<span class=${`c-${s}`}>${team(x[s])}</span> <b class="num">${x.num[s]}</b>${x.flipped[s] ? html` <span class="note">flipped</span>` : ''}`;
+  return html`<div class="card match np-card">
+    <div class="section-head">
+      <h2>Vegas</h2>
+      <span class="meta">${VG.vegasSummary(g)}</span>
+    </div>
+    ${cur && html`<div class="np-hole" style="flex-wrap:wrap;gap:6px 12px">Hole ${hole + 1}: ${side(cur, 'a')} <span class="c-n">v</span> ${side(cur, 'b')}
+      <span class=${`pill ${cur.winner ?? 'n'}`}>${cur.winner ? `${team(cur[cur.winner])} +${cur.points}` : 'Push'}</span></div>`}
+    ${next && g.partners === 'sixes' && html`<div class="np-hole">Hole ${hole + 1}: <span class="c-a">${team(next.a)}</span> <span class="c-n">v</span> <span class="c-b">${team(next.b)}</span></div>`}
+    <div class="np-rows">${ranked.map((p) => html`<div class="np-row">
+      <${Avatar} p=${p} size="sm" />
+      <span class="grow">${first(p.name)} <span class="note">${r.strokes[p.id] ? `${r.strokes[p.id]} ${r.strokes[p.id] === 1 ? 'stroke' : 'strokes'}` : ''}</span></span>
+      <span class="np-pts num">${r.totals[p.id] > 0 ? '+' : ''}${r.totals[p.id]} pts</span>
+      <b class=${`num ${moneyCls(r.money[p.id] || 0)}`}>${money(r.money[p.id] || 0)}</b>
+    </div>`)}</div>
+    ${detail && html`<div class="sc-wrap"><table class="sc">
+      <tbody>
+        <tr class="hdr"><th class="stick" scope="col">Hole</th>${nine(0).map((i) => html`<td>${i + 1}</td>`)}<td class="tot">Out</td>${nine(9).map((i) => html`<td>${i + 1}</td>`)}<td class="tot">In</td><td class="tot">Tot</td></tr>
+        ${['a', 'b'].map((s) => html`<tr class="si"><td class="stick">${s === 'a' ? 'Blue' : 'Orange'} #</td>
+          ${nine(0).map((i) => html`<td class=${`c-${s}`}>${r.holes[i]?.num[s] ?? ''}</td>`)}<td class="tot"></td>
+          ${nine(9).map((i) => html`<td class=${`c-${s}`}>${r.holes[i]?.num[s] ?? ''}</td>`)}<td class="tot"></td><td class="tot"></td></tr>`)}
+        ${pl.map((p) => html`<tr><td class="stick">${first(p.name)}</td>
+          ${nine(0).map((i) => html`<td class=${won(r.holes[i], p.id) > 0 ? 'np-sweep' : ''}>${r.holes[i] ? won(r.holes[i], p.id) : ''}</td>`)}<td class="tot">${part(p.id, 0)}</td>
+          ${nine(9).map((i) => html`<td class=${won(r.holes[i], p.id) > 0 ? 'np-sweep' : ''}>${r.holes[i] ? won(r.holes[i], p.id) : ''}</td>`)}<td class="tot">${part(p.id, 9)}</td><td class="tot">${r.totals[p.id]}</td>
+        </tr>`)}
+      </tbody>
+    </table></div>
+    <p class="note" style="margin:0">Team numbers on each hole${g.partners === 'sixes' ? ' (partners switch every 6 holes)' : ''}, then each player's points. Money is points \u00d7 ${g.stake < 1 ? `${g.stake * 100}\u00a2` : `$${g.stake}`}.</p>`}
+  </div>`;
+}
+
+/**
+ * Hammer. On the Score tab (`hole` set) it shows what the hole is worth, who holds the
+ * hammer, and big buttons to throw it, fold, or take back the last tap.
+ */
+function HammerCard({ round, r, hole, detail, dispatch }) {
+  const g = r.game;
+  const name = (s) => g[s].map((id) => first(round.players.find((p) => p.id === id)?.name ?? '?')).join(' & ');
+  const other = (s) => (s === 'a' ? 'b' : 'a');
+  const cur = hole != null ? r.holes[hole] : null;
+  const set = (action, side) => dispatch?.({ type: 'hammerSet', roundId: round.id, gameId: g.id, hole, throws: HM.nextThrow(g.hammers?.[hole], action, side) });
+  const receiving = cur?.n && !cur.declined && !cur.scored ? other(cur.last) : null;
+  const throwers = cur?.holder === 'either' ? ['a', 'b'] : cur?.holder ? [cur.holder] : [];
+  const result = (x) => {
+    if (x.winner === 'tie') return g.ties === 'carry' ? `Tied: $${x.value} carries` : 'Push';
+    if (!x.winner) return null;
+    return `${name(x.winner)} ${g[x.winner].length > 1 ? 'win' : 'wins'} $${x.won}${g[x.winner].length > 1 ? ' each' : ''}${x.declined ? ' (folded)' : x.birdie ? ' (birdie)' : ''}`;
+  };
+  const holes = Array.from({ length: 18 }, (_, i) => i);
+  const nine = (st) => holes.slice(st, st + 9);
+  const part = (side, st) => nine(st).reduce((t, i) => t + (r.holes[i].winner === side ? r.holes[i].won : r.holes[i].winner === other(side) ? -r.holes[i].won : 0), 0);
+  const cell = (x, side) => (x.winner === side ? `+${x.won}` : x.winner === other(side) ? `\u2212${x.won}` : x.winner === 'tie' ? '0' : '');
+  return html`<div class="card match np-card">
+    <div class="section-head">
+      <h2>Hammer</h2>
+      <span class="meta">${HM.hammerSummary(g)}</span>
+    </div>
+    ${cur && html`<div class="hammer-hole">
+      <div class="hammer-value">
+        <div><span class="eyebrow">Hole ${hole + 1}</span><b class="num">$${cur.winner && cur.winner !== 'tie' ? cur.won : cur.value}</b><span class="note">a man${cur.start > g.stake ? ` \u00b7 $${cur.start - g.stake} carried in` : ''}</span></div>
+        <div class="hammer-holder">${cur.holder === 'either' ? html`Either side can hammer`
+          : cur.holder ? html`<span class=${`c-${cur.holder}`}>${I.hammer}</span><b class=${`c-${cur.holder}`}>${name(cur.holder)}</b> ${g[cur.holder].length > 1 ? 'hold' : 'holds'} the hammer`
+          : cur.n && !cur.declined && !cur.scored ? 'No more hammers this hole' : ''}</div>
+      </div>
+      ${cur.n > 0 && html`<div class="chips">${Array.from({ length: cur.n }, (_, i) => {
+        const side = i % 2 ? other(cur.by) : cur.by;
+        return html`<span class="strokes-chip"><span class=${`c-${side}`}>${name(side)}</span> \u00d7${2 ** (i + 1)} \u00b7 $${cur.start * 2 ** (i + 1)}</span>`;
+      })}${cur.declined && html`<span class="strokes-chip"><span class=${`c-${other(cur.last)}`}>${name(other(cur.last))}</span> folded</span>`}</div>`}
+      ${result(cur) && html`<div><span class=${`pill ${cur.winner === 'tie' ? 'n' : cur.winner}`}>${result(cur)}</span></div>`}
+      ${dispatch && (throwers.length > 0 || receiving) && html`<div class="hammer-actions">
+        ${throwers.map((side) => html`<button type="button" class=${`btn hammer-btn ${side}`} onClick=${() => set('hammer', side)}>
+          ${I.hammer} ${name(side)} hammer<small>to $${cur.value * 2}</small></button>`)}
+        ${receiving && html`<button type="button" class="btn ghost" onClick=${() => set('decline')}>${name(receiving)} ${g[receiving].length > 1 ? 'fold' : 'folds'}<small>lose $${cur.value / 2}</small></button>`}
+      </div>`}
+      ${dispatch && cur.n > 0 && html`<button type="button" class="link" style="align-self:flex-start" onClick=${() => set('undo')}>Undo last tap</button>`}
+    </div>`}
+    ${r.pendingCarry > 0 && r.thru < 18 && hole == null && html`<div class="np-hole"><span class="pill b">$${r.pendingCarry} carried to the next hole</span></div>`}
+    <div class="np-rows">${['a', 'b'].sort((x, y) => r.side[y] - r.side[x]).map((side) => html`<div class="np-row">
+      <span class="grow"><b class=${`c-${side}`}>${name(side)}</b></span>
+      <b class=${`num ${moneyCls(r.side[side])}`}>${money(r.side[side])}${g[side].length > 1 ? html`<span class="note"> each</span>` : ''}</b>
+    </div>`)}</div>
+    ${detail && html`<div class="sc-wrap"><table class="sc">
+      <tbody>
+        <tr class="hdr"><th class="stick" scope="col">Hole</th>${nine(0).map((i) => html`<td>${i + 1}</td>`)}<td class="tot">Out</td>${nine(9).map((i) => html`<td>${i + 1}</td>`)}<td class="tot">In</td><td class="tot">Tot</td></tr>
+        <tr class="si"><td class="stick">Hammers</td>${nine(0).map((i) => html`<td>${r.holes[i].n ? `${r.holes[i].n}${r.holes[i].declined ? 'F' : ''}` : ''}</td>`)}<td class="tot"></td>${nine(9).map((i) => html`<td>${r.holes[i].n ? `${r.holes[i].n}${r.holes[i].declined ? 'F' : ''}` : ''}</td>`)}<td class="tot"></td><td class="tot"></td></tr>
+        ${['a', 'b'].map((side) => html`<tr><td class="stick"><span class=${`c-${side}`}>${name(side)}</span></td>
+          ${nine(0).map((i) => html`<td class=${r.holes[i].winner === side ? 'np-sweep' : ''}>${cell(r.holes[i], side)}</td>`)}<td class="tot">${part(side, 0)}</td>
+          ${nine(9).map((i) => html`<td class=${r.holes[i].winner === side ? 'np-sweep' : ''}>${cell(r.holes[i], side)}</td>`)}<td class="tot">${part(side, 9)}</td><td class="tot">${r.side[side]}</td>
+        </tr>`)}
+      </tbody>
+    </table></div>
+    <p class="note" style="margin:0">Hammers: how many were thrown on the hole; F = the other side folded. Dollars are per man.</p>`}
+  </div>`;
+}
 
 /** "Bo & Al", "Bo alone", "Bo blind": the call on a Wolf hole. */
 function wolfCall(round, x) {
@@ -1939,7 +2197,7 @@ function DayTotal({ round, data }) {
         // Group v group: name the ball ("2nd ball"), since every match is against the same side.
         what: c.match.ball || (ballChip(c.match) && data.matches.some((x) => x !== c && x.match.ball)) ? ballChip(c.match)
           : `v ${sideNames(round, c.match.a.includes(p.id) ? c.match.b : c.match.a).split(' & ').map((n) => n[0]).join('')}`,
-      })).concat(data.side.filter((r) => r.game.players.includes(p.id)).map((r) => ({ v: r.money[p.id] || 0, what: r.game.type === 'wolf' ? 'Wolf' : 'v 9 Pt' })));
+      })).concat(data.side.filter((r) => sidePlayers(r.game).includes(p.id)).map((r) => ({ v: r.money[p.id] || 0, what: { wolf: 'Wolf', hammer: 'Hammer', vegas: 'Vegas' }[r.game.type] ?? 'v 9 Pt' })));
       return html`<div class="board-row" style="grid-template-columns:minmax(0,1fr) auto">
         <div style="min-width:0">
           <div class="pname">${first(p.name)}</div>
