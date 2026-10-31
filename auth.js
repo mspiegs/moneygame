@@ -95,6 +95,20 @@ export async function signUp(name, email, password) {
   return session();
 }
 
+/**
+ * Emails a link for setting a new password. The link opens the website (also from
+ * the iPhone app, which can't catch links), lands on /?reset=1&token=…, and the
+ * new password works everywhere.
+ */
+export async function requestPasswordReset(email) {
+  const site = NATIVE ? API_BASE : location.origin;
+  await call('/request-password-reset', { email, redirectTo: `${site}/?reset=1` });
+}
+
+export async function resetPassword(token, newPassword) {
+  await call('/reset-password', { token, newPassword });
+}
+
 export async function signOut() {
   jwt = null;
   remember(null);

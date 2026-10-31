@@ -261,9 +261,19 @@ function App() {
   const [groupKey, setGroupKey] = useState(0);
   const useGroup = (group) => { Sync.useGroup(user.id, group); setGroupKey((k) => k + 1); };
   const doneInvite = () => { history.replaceState(null, '', location.pathname); setInvite(null); };
+  // A password reset link from the email (/?reset=1&token=…, or &error=… if it's no good).
+  const [reset, setReset] = useState(() => {
+    const q = new URLSearchParams(location.search);
+    return q.has('reset') ? { token: q.get('token'), error: q.get('error') } : null;
+  });
+  // What the sign-in screen opens with after a reset: { mode, notice }.
+  const [after, setAfter] = useState(null);
+  const doneReset = (next) => { history.replaceState(null, '', location.pathname); setReset(null); setAfter(next); };
 
   if (user === undefined) return html`<div class="app"></div>`;
-  if (!user) return html`<${SignIn} offline=${offline} invite=${invite} onDone=${(u) => { setOffline(false); setUser(u); }} />`;
+  if (reset) return html`<${ResetPassword} token=${!reset.error && reset.token} onDone=${doneReset} />`;
+  if (!user) return html`<${SignIn} key=${after?.mode} offline=${offline} invite=${invite} start=${after?.mode} notice=${after?.notice}
+    onDone=${(u) => { setOffline(false); setUser(u); }} />`;
   if (invite) return html`<${Joining} code=${invite} onJoined=${(res) => { useGroup(res.group); setJoined(res.group.name); doneInvite(); }} onSkip=${doneInvite} />`;
   return html`<${Main} key=${`${user.id}:${groupKey}`} user=${user} joined=${joined} onGroup=${useGroup}
     onSignOut=${async () => { await A.signOut(); setUser(null); }} />`;
@@ -361,24 +371,32 @@ function Main({ user, onSignOut, onGroup, joined }) {
 }
 
 // ---------- Sign in ----------
-function SignIn({ offline, invite, onDone }) {
+function SignIn({ offline, invite, start, notice, onDone }) {
   const preview = useInvitePreview(invite);
-  const [mode, setMode] = useState(invite ? 'up' : 'in'); // 'in' | 'up'
+  const [mode, setMode] = useState(start || (invite ? 'up' : 'in')); // 'in' | 'up' | 'forgot' | 'sent'
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const up = mode === 'up';
+  const forgot = mode === 'forgot';
+  const switchTo = (m) => { setMode(m); setError(null); };
   // Joining as a named player: start with their name.
   useEffect(() => { if (preview?.player && !preview.player.taken) setName((n) => n || preview.player.name); }, [preview]);
-  const valid = email.includes('@') && password.length >= 8 && (!up || name.trim());
+  const valid = email.includes('@') && (forgot || (password.length >= 8 && (!up || name.trim())));
   const submit = async (e) => {
     e.preventDefault();
     if (!valid || busy) return;
     setBusy(true);
     setError(null);
     try {
+      if (forgot) {
+        await A.requestPasswordReset(email.trim());
+        setMode('sent');
+        setBusy(false);
+        return;
+      }
       const user = up ? await A.signUp(name.trim(), email.trim(), password) : await A.signIn(email.trim(), password);
       if (user) onDone(user);
       else setError('Signed in, but the session didn\u2019t stick. Check that cookies are allowed.');
@@ -389,7 +407,11 @@ function SignIn({ offline, invite, onDone }) {
   };
   return html`<div class="app"><main class="page fade-in signin">
     <div class="wordmark">Dorm<i>ie</i></div>
-    <p class="sub">${up ? 'Create an account to save your rounds and keep the running tab with everyone you play.' : 'Sign in to your rounds, players and running tab.'}</p>
+    <p class="sub">${up ? 'Create an account to save your rounds and keep the running tab with everyone you play.'
+      : forgot ? 'Enter your email and we\u2019ll send you a link to set a new password.'
+      : mode === 'sent' ? 'Check your email.'
+      : 'Sign in to your rounds, players and running tab.'}</p>
+    ${notice && html`<div class="banner">${I.info}<span>${notice}</span></div>`}
     ${offline && html`<div class="banner">${I.info}<span>You're offline. Sign in once you have signal.</span></div>`}
     ${preview && (preview.error || preview.expired
       ? html`<div class="banner">${I.info}<span>${preview.error || 'That invite has expired. Ask for a new link.'}</span></div>`
@@ -397,15 +419,59 @@ function SignIn({ offline, invite, onDone }) {
           <b>${preview.inviter} invited you to ${preview.group.name}</b>
           <span>${preview.player && !preview.player.taken ? `You'll join as ${preview.player.name}, with your rounds and running tab.` : 'You\u2019ll see the group\u2019s rounds and your running tab.'}${up ? ' Create an account to join.' : ' Sign in to join.'}</span>
         </div>`)}
-    <form class="card pad" style="display:flex;flex-direction:column;gap:12px" onSubmit=${submit}>
+    ${mode === 'sent' ? html`<div class="card pad" style="display:flex;flex-direction:column;gap:12px">
+      <span>If there's a Dormie account for <b>${email.trim()}</b>, a link to reset the password is on its way. It works for 15 minutes.</span>
+      ${A.NATIVE && html`<span class="note">The link opens in your browser. Set your new password there, then come back here and sign in.</span>`}
+      <button type="button" class="btn primary lg block" onClick=${() => { setPassword(''); switchTo('in'); }}>Back to sign in</button>
+      <button type="button" class="link" onClick=${() => switchTo('forgot')}>Didn't get it? Send again</button>
+    </div>` : html`<form class="card pad" style="display:flex;flex-direction:column;gap:12px" onSubmit=${submit}>
       ${up && html`<div class="field"><label for="si-name">Name</label><input id="si-name" class="input" value=${name} onInput=${(e) => setName(e.target.value)} autocomplete="name" placeholder="Your name" /></div>`}
       <div class="field"><label for="si-email">Email</label><input id="si-email" class="input" type="email" value=${email} onInput=${(e) => setEmail(e.target.value)} autocomplete="email" autocapitalize="off" /></div>
-      <div class="field"><label for="si-pw">Password</label><input id="si-pw" class="input" type="password" value=${password} onInput=${(e) => setPassword(e.target.value)} autocomplete=${up ? 'new-password' : 'current-password'} />
-        ${up && html`<span class="note">At least 8 characters.</span>`}</div>
+      ${!forgot && html`<div class="field"><label for="si-pw">Password</label><input id="si-pw" class="input" type="password" value=${password} onInput=${(e) => setPassword(e.target.value)} autocomplete=${up ? 'new-password' : 'current-password'} />
+        ${up ? html`<span class="note">At least 8 characters.</span>`
+          : html`<button type="button" class="link forgot" onClick=${() => switchTo('forgot')}>Forgot password?</button>`}</div>`}
       ${error && html`<div class="form-error" role="alert">${error}</div>`}
-      <button class="btn primary lg block" disabled=${!valid || busy}>${busy ? 'One sec\u2026' : up ? 'Create account' : 'Sign in'}</button>
-    </form>
-    <p class="sub" style="text-align:center">${up ? 'Already have an account?' : 'New here?'} <button type="button" class="link" onClick=${() => { setMode(up ? 'in' : 'up'); setError(null); }}>${up ? 'Sign in' : 'Create an account'}</button></p>
+      <button class="btn primary lg block" disabled=${!valid || busy}>${busy ? 'One sec\u2026' : up ? 'Create account' : forgot ? 'Send reset link' : 'Sign in'}</button>
+    </form>`}
+    ${mode === 'sent' ? null : forgot
+      ? html`<p class="sub" style="text-align:center">Remembered it? <button type="button" class="link" onClick=${() => switchTo('in')}>Sign in</button></p>`
+      : html`<p class="sub" style="text-align:center">${up ? 'Already have an account?' : 'New here?'} <button type="button" class="link" onClick=${() => switchTo(up ? 'in' : 'up')}>${up ? 'Sign in' : 'Create an account'}</button></p>`}
+  </main></div>`;
+}
+
+/** Set a new password from the emailed link. `token` is false when the link is expired or already used. */
+function ResetPassword({ token, onDone }) {
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const valid = password.length >= 8;
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!valid || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await A.resetPassword(token, password);
+      onDone({ mode: 'in', notice: 'Password updated. Sign in with it here or in the Dormie app.' });
+    } catch (err) {
+      setError(err instanceof TypeError ? 'No connection. Try again when you have signal.'
+        : err.code === 'INVALID_TOKEN' ? 'This link has expired or was already used. Send yourself a new one.' : err.message);
+      setBusy(false);
+    }
+  };
+  return html`<div class="app"><main class="page fade-in signin">
+    <div class="wordmark">Dorm<i>ie</i></div>
+    ${token
+      ? html`<p class="sub">Choose a new password.</p>
+        <form class="card pad" style="display:flex;flex-direction:column;gap:12px" onSubmit=${submit}>
+          <div class="field"><label for="rp-pw">New password</label><input id="rp-pw" class="input" type="password" value=${password} onInput=${(e) => setPassword(e.target.value)} autocomplete="new-password" />
+            <span class="note">At least 8 characters.</span></div>
+          ${error && html`<div class="form-error" role="alert">${error}</div>`}
+          <button class="btn primary lg block" disabled=${!valid || busy}>${busy ? 'One sec\u2026' : 'Save password'}</button>
+        </form>`
+      : html`<div class="banner">${I.info}<span>This link has expired or was already used. Reset links work for 15 minutes.</span></div>
+        <button type="button" class="btn primary lg block" onClick=${() => onDone({ mode: 'forgot' })}>Send a new link</button>`}
+    <p class="sub" style="text-align:center"><button type="button" class="link" onClick=${() => onDone(null)}>Back to sign in</button></p>
   </main></div>`;
 }
 
