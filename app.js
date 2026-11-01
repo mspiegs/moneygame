@@ -1065,14 +1065,15 @@ function Setup({ state, dispatch, go, user }) {
   // Each Nassau keeps its own settings and matches. The first becomes round.game; the rest
   // are saved as side games. customDraft is the custom match being built, before "Add".
   const newNassau = (format) => ({ id: uid('ns-'), game: { ...N.defaultGame(), format }, teams: {}, wheel: [], scoring: 'bestball', balls: [1], custom: [], customDraft: null });
-  const [nassaus, setNassaus] = useState(() => [newNassau('teams')]);
+  // No game is picked up front: the round starts with whatever gets added on the games step.
+  const [nassaus, setNassaus] = useState([]);
   const setN = (id, patch) => setNassaus((ns) => ns.map((n) => (n.id === id ? { ...n, ...patch } : n)));
 
   const [adding, setAdding] = useState(false);
   const [addingCourse, setAddingCourse] = useState(false);
   const [scan, setScan] = useState(null); // scorecard result awaiting review
-  const [openGame, setOpenGame] = useState(() => nassaus[0].id); // which game's settings are showing
-  const [sideGames, setSideGames] = useState([]); // 9 Point (3 players) and Wolf (3-5 players) games
+  const [openGame, setOpenGame] = useState(null); // which game's settings are showing
+  const [sideGames, setSideGames] = useState([]); // every game that isn't a Nassau
   // Once a reviewed scorecard is applied, the round's players are exactly the card's, in card order:
   // { rows: [{ nameOnCard, playerId, scores }], notes, courseName }
   const [card, setCard] = useState(null);
@@ -1288,7 +1289,7 @@ function Setup({ state, dispatch, go, user }) {
             onRemove=${() => { setSideGames(sideGames.filter((x) => x.id !== g.id)); setOpenGame(null); }}>
             <${NinePointSetup} round=${draftRound} g=${g} players=${selected} onChange=${(v) => setSideGames(sideGames.map((x) => (x.id === g.id ? v : x)))} />
           </${GameCard}>`)}
-          ${!nassaus.length && !sideGames.length && html`<div class="card empty-state">No games yet. Add one below.</div>`}
+          ${!nassaus.length && !sideGames.length && html`<div class="card empty-state">No games yet. Pick one below to get started.</div>`}
         </div>
         <div class="section">
           <div class="section-head"><h2>Add a game</h2></div>
@@ -1444,6 +1445,7 @@ function NinePointSetup({ round, g, players, onChange, onRemove }) {
 /** Setup for one Snake game: who's in, what it's worth and house rules. */
 function SnakeSetup({ g, players, onChange }) {
   const upd = (patch) => onChange({ ...g, ...patch });
+  const growth = SN.growthOf(g);
   const toggle = (id) => upd({ players: g.players.includes(id) ? g.players.filter((x) => x !== id) : [...g.players, id] });
   return html`<div class="card np-setup">
     <div class="opt-sub" style="padding-top:14px">
@@ -1451,12 +1453,17 @@ function SnakeSetup({ g, players, onChange }) {
       <div class="chips">${players.map((p) => html`<button type="button" class="chip" aria-pressed=${g.players.includes(p.id)} onClick=${() => toggle(p.id)}>${first(p.name)}</button>`)}</div>
     </div>
     <p class="opt-sub note" style="margin:0">Three-putt and you take the snake. It stays with you until someone else three-putts. Whoever holds it at the end pays everyone else.</p>
-    <${Opt} title="Snake is worth" desc=${g.grow ? 'To each player, for each three-putt in the game' : 'To each player'}>
+    <${Opt} title=${growth === 'flat' ? 'Snake is worth' : 'First snake is worth'} desc="To each player">
       <${Stepper} label="Snake dollars" value=${g.stake} min=${1} max=${100} step=${1} format=${(v) => `$${v}`} onChange=${(v) => upd({ stake: v })} />
     </${Opt}>
-    <${Opt} title="It grows" desc=${g.grow ? `Every three-putt adds $${g.stake}: after 5 three-putts the holder pays $${g.stake * 5} to each` : `Off: the holder pays a flat $${g.stake} to each`}>
-      <${Switch} label="Snake grows" on=${g.grow} onChange=${(v) => upd({ grow: v })} />
-    </${Opt}>
+    <div class="opt-sub">
+      <div class="eyebrow" style="margin-bottom:8px">Each three-putt after that</div>
+      <${Seg} tall value=${growth} onChange=${(v) => upd({ growth: v, grow: undefined })} options=${[
+        { value: 'add', label: `Adds $${g.stake}`, sub: [1, 2, 3, 4].map((k) => `$${SN.snakeValue({ ...g, growth: 'add' }, k)}`).join(', ') },
+        { value: 'double', label: 'Doubles it', sub: [1, 2, 3, 4].map((k) => `$${SN.snakeValue({ ...g, growth: 'double' }, k)}`).join(', ') },
+        { value: 'flat', label: 'Stays the same', sub: `always $${g.stake}` },
+      ]} />
+    </div>
     <${Opt} title="Four-putts count twice" desc="A four-putt or worse counts as two three-putts">
       <${Switch} label="Four-putts count twice" on=${g.fourDouble} onChange=${(v) => upd({ fourDouble: v })} />
     </${Opt}>

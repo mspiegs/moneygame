@@ -1,7 +1,9 @@
 // Snake: a putting game. Three-putt and you're holding the snake until someone
 // else three-putts. Whoever holds it at the end pays every other player.
 // Options (per game):
-//   grow         Each three-putt adds `stake` to what the snake is worth; off, it's a flat `stake`.
+//   growth       'add': each three-putt adds `stake` to what the snake is worth ($1, $2, $3...).
+//                'double': each three-putt after the first doubles it ($1, $2, $4, $8...).
+//                'flat': it's always `stake`. (Older games have `grow` true/false instead.)
 //   fourDouble   A four-putt (or worse) counts as two three-putts.
 //   nines        One snake for 18, or a front nine snake and a fresh back nine snake.
 // Three-putts live on the game: snakes[hole] = [{ p: playerId, n: 3 | 4 }], in the order they
@@ -14,7 +16,7 @@ export function defaultSnake(players = []) {
     type: 'snake',
     players: [...players],
     stake: 1,
-    grow: true,
+    growth: 'add',
     fourDouble: true,
     nines: false,
     snakes: {},
@@ -22,6 +24,16 @@ export function defaultSnake(players = []) {
 }
 
 const round2 = (v) => Math.round(v * 100) / 100;
+
+/** 'add', 'double' or 'flat'; games saved before doubling have `grow` instead. */
+export const growthOf = (game) => game.growth ?? (game.grow === false ? 'flat' : 'add');
+
+/** What the snake is worth after `count` three-putts. */
+export function snakeValue(game, count) {
+  if (!count) return 0;
+  const g = growthOf(game);
+  return g === 'double' ? game.stake * 2 ** (count - 1) : g === 'add' ? game.stake * count : game.stake;
+}
 
 /** The snake runs: all 18, or the front and back nines. */
 export const segmentsOf = (game) => (game.nines ? [{ start: 0, end: 8, label: 'Front' }, { start: 9, end: 17, label: 'Back' }] : [{ start: 0, end: 17, label: '18' }]);
@@ -58,7 +70,7 @@ export function computeSnake(round, game) {
         count += weight(game, e);
         holder = e.p;
       }
-    const value = holder ? (game.grow ? game.stake * count : game.stake) : 0;
+    const value = holder ? snakeValue(game, count) : 0;
     if (holder)
       for (const id of ids) {
         if (id === holder) continue;
@@ -82,7 +94,7 @@ export function computeSnake(round, game) {
 export function snakeSummary(game) {
   return [
     `$${game.stake}`,
-    game.grow ? `grows $${game.stake} a three-putt` : 'flat',
+    { add: `grows $${game.stake} a three-putt`, double: 'doubles each three-putt', flat: 'flat' }[growthOf(game)],
     game.fourDouble && '4-putts count twice',
     game.nines && 'front and back',
   ].filter(Boolean).join(' · ');
