@@ -23,10 +23,13 @@ export const GET = authed(handle(async (request, user) => {
     sql`select l.round_id, l.winner_id, l.loser_id, l.amount from ledger_entries l join rounds r on r.id = l.round_id
       where r.group_id = ${group.id} and r.deleted_at is null
         and (r.created_by = ${user.id} or exists (select 1 from round_players vp join players vpl on vpl.id = vp.player_id where vp.round_id = r.id and vpl.user_id = ${user.id}))`,
-    // Only payments this user is part of (or recorded).
+    // Payments this user is part of (or recorded), and everything paid against a round they can see:
+    // how the others in it paid decides who still owes whom.
     sql`select p.id, p.from_id, p.to_id, p.amount, p.note, p.paid_at, p.round_id from payments p
       where p.group_id = ${group.id} and (p.recorded_by = ${user.id}
-        or exists (select 1 from players pl where pl.id in (p.from_id, p.to_id) and pl.user_id = ${user.id}))
+        or exists (select 1 from players pl where pl.id in (p.from_id, p.to_id) and pl.user_id = ${user.id})
+        or exists (select 1 from rounds r where r.id = p.round_id and r.deleted_at is null and (r.created_by = ${user.id}
+          or exists (select 1 from round_players vp join players vpl on vpl.id = vp.player_id where vp.round_id = r.id and vpl.user_id = ${user.id}))))
       order by p.paid_at desc`,
   ]);
 

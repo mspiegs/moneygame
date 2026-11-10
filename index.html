@@ -458,6 +458,35 @@ td.res { font-weight: 800; font-size: 12px; }
 .pay { display: flex; align-items: center; gap: 10px; padding: 12px 16px; font-weight: 650; }
 .pay .arrow { color: var(--ink-3); width: 18px; height: 18px; flex: none; }
 .pay .amt { margin-left: auto; font-family: var(--display); font-size: 22px; font-weight: 700; }
+.payer + .payer { border-top: 1px solid var(--line); }
+.payer-head { display: flex; align-items: center; gap: 12px; padding: 14px 16px; }
+.payer-head .grow, .pay-to .grow { flex: 1; min-width: 0; }
+.payer-head .name { font-weight: 750; }
+.payer-head .meta { font-size: 12.5px; color: var(--ink-3); }
+.pay-line { display: flex; align-items: center; gap: 8px; padding: 0 16px 12px 24px; font-weight: 650; font-size: 14px; }
+.pay-line .arrow { color: var(--ink-3); width: 16px; height: 16px; flex: none; }
+.pay-line .amt { margin-left: auto; font-family: var(--display); font-size: 19px; font-weight: 700; }
+.pay-line.todo { color: var(--ink-2); }
+.pay-line.todo .note { margin-left: 4px; }
+.pay-line .paid-tag { margin-left: 4px; }
+.paid-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 750; color: var(--win); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.paid-tag svg { width: 13px; height: 13px; flex: none; }
+.pay-split { display: flex; flex-direction: column; gap: 10px; padding: 0 16px 16px; }
+.pay-to { display: flex; align-items: center; gap: 10px; }
+.pay-to .name { font-weight: 700; }
+.pay-to .meta { font-size: 12px; color: var(--ink-3); }
+.pay-to .link { font-size: 12.5px; white-space: nowrap; }
+.money-input { display: flex; align-items: center; gap: 2px; width: 96px; height: 44px; padding: 0 10px; border-radius: 12px; background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--line); flex: none; }
+.money-input:focus-within { box-shadow: inset 0 0 0 2px var(--accent); }
+.money-input span { color: var(--ink-3); font-weight: 700; }
+.money-input input { width: 100%; min-width: 0; border: 0; background: none; font: inherit; font-weight: 750; font-size: 17px; text-align: right; padding: 0; color: inherit; }
+.money-input input:focus { outline: none; }
+.pay-tally { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); font-size: 13.5px; font-weight: 650; }
+.pay-tally b { font-family: var(--display); font-size: 17px; }
+.pay-tally span:last-child { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-3); }
+.pay-tally.done span:last-child { color: var(--win); }
+.pay-tally.over span:last-child { color: var(--loss); }
+.pay-tally svg { width: 14px; height: 14px; }
 .note { font-size: 12.5px; color: var(--ink-3); }
 .banner { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-radius: 12px; background: var(--flag-soft); font-size: 13.5px; font-weight: 600; }
 .banner svg { width: 18px; height: 18px; color: var(--flag); flex: none; }

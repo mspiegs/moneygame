@@ -97,3 +97,28 @@ export function gamesLabel(round) {
 
 /** Number of things being played for: Nassau matches plus side games. */
 export const gameCount = (round) => nassausOf(round).reduce((t, n) => t + n.game.matches.length, 0) + sideGamesOf(round).filter((g) => SCORERS[g.type]).length;
+
+/**
+ * How a finished round gets paid. Players pay whoever they like (one loser pays one winner
+ * the lot, his partner pays the other), so payments recorded against the round come first,
+ * then the fewest payments that square up whatever is left.
+ *   balances: { playerId: $ } (the round's settled money); payments: that round's payments
+ *   transfers: [{ from, to, amount, paid }]; left: { playerId: $ still to collect (+) or pay (-) }
+ */
+export function settlePlan(balances, payments = []) {
+  const left = Object.fromEntries(Object.entries(balances).map(([id, v]) => [id, round2(v)]));
+  const paid = new Map();
+  for (const p of payments) {
+    if (!(p.from in left) || !(p.to in left)) continue;
+    left[p.from] = round2(left[p.from] + p.amount);
+    left[p.to] = round2(left[p.to] - p.amount);
+    const key = `${p.from}|${p.to}`;
+    paid.set(key, round2((paid.get(key) || 0) + p.amount));
+  }
+  const transfers = [...paid].map(([key, amount]) => {
+    const [from, to] = key.split('|');
+    return { from, to, amount, paid: true };
+  });
+  for (const t of N.settleUp(left)) transfers.push({ ...t, paid: false });
+  return { transfers, left };
+}

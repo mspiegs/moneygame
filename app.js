@@ -393,7 +393,8 @@ function Main({ user, onSignOut, onGroup, joined }) {
   if (route.view === 'setup') return html`<${Setup} state=${state} dispatch=${dispatch} go=${go} user=${user} />`;
   if (route.view === 'round') {
     const round = state.rounds.find((r) => r.id === route.id);
-    if (round) return html`<${Round} round=${round} dispatch=${dispatch} go=${go} />`;
+    if (round) return html`<${Round} round=${round} dispatch=${dispatch} go=${go} payments=${state.payments}
+      meId=${state.players.find((p) => p.userId === user.id)?.id} />`;
   }
   return html`<div class="app">
     ${route.view === 'account' ? html`<${Account} user=${user} onSignOut=${onSignOut} go=${go} syncStatus=${syncStatus}
@@ -622,6 +623,16 @@ function Home({ state, dispatch, go, user, syncStatus, joined }) {
 }
 
 // ---------- Money ----------
+/** Each player's money in a round from its pairwise rows: { playerId: $ }. */
+function roundBalances(round, rows) {
+  const bal = Object.fromEntries(round.players.map((p) => [p.id, 0]));
+  for (const e of rows) {
+    if (e.winner in bal) bal[e.winner] += e.amount;
+    if (e.loser in bal) bal[e.loser] -= e.amount;
+  }
+  return bal;
+}
+
 /**
  * My running tab with everyone I've played, from my side (+ means they owe me):
  * [{ id, name, color, net, paidIn, paidOut, owed, live, history }], biggest balances first.
@@ -633,7 +644,7 @@ function moneyBook(state, meId) {
   const person = (id, fallback) => {
     if (!people.has(id)) {
       const p = state.players.find((x) => x.id === id) || fallback || { name: 'Unknown', color: 'var(--ink-3)' };
-      people.set(id, { id, name: p.name, color: p.color, net: 0, paidIn: 0, paidOut: 0, live: 0, history: [] });
+      people.set(id, { id, name: p.name, color: p.color, net: 0, due: 0, paidIn: 0, paidOut: 0, live: 0, history: [] });
     }
     return people.get(id);
   };
@@ -646,14 +657,19 @@ function moneyBook(state, meId) {
     if (r.sample || !r.players.some((p) => p.id === meId)) continue;
     const final = r.status === 'final';
     const rows = final ? (frozen.get(r.id) ?? G.pairwiseAll(r)) : G.pairwiseAll(r, { projected: true });
+    // Once anyone records payments against a finished round, what each pair owes follows how it was
+    // actually paid (one loser paying one winner the lot), not the even split between every pair.
+    const roundPays = final ? (state.payments || []).filter((pay) => pay.roundId === r.id) : [];
+    const plan = roundPays.length ? G.settlePlan(roundBalances(r, rows), roundPays).transfers : null;
     for (const opp of r.players) {
       if (opp.id === meId) continue;
       const e = rows.find((x) => (x.winner === meId && x.loser === opp.id) || (x.loser === meId && x.winner === opp.id));
       const amount = !e ? 0 : e.winner === meId ? e.amount : -e.amount;
+      const due = plan ? sum(plan.map((t) => (t.from === opp.id && t.to === meId ? t.amount : t.from === meId && t.to === opp.id ? -t.amount : 0))) : amount;
       const p = person(opp.id, opp);
-      if (final) p.net += amount;
+      if (final) { p.net += amount; p.due += due; }
       else p.live += amount;
-      p.history.push({ kind: 'round', at: r.createdAt, round: r, amount, live: !final });
+      p.history.push({ kind: 'round', at: r.createdAt, round: r, amount, due, live: !final });
     }
   }
   for (const pay of state.payments || []) {
@@ -665,7 +681,7 @@ function moneyBook(state, meId) {
     p.history.push({ kind: 'payment', at: pay.paidAt, payment: pay, amount: mine ? pay.amount : -pay.amount });
   }
   return [...people.values()]
-    .map((p) => ({ ...p, owed: Math.round((p.net + p.paidOut - p.paidIn) * 100) / 100, history: p.history.sort((a, b) => b.at - a.at) }))
+    .map((p) => ({ ...p, owed: Math.round((p.due + p.paidOut - p.paidIn) * 100) / 100, history: p.history.sort((a, b) => b.at - a.at) }))
     .sort((a, b) => Math.abs(b.owed) - Math.abs(a.owed) || Math.abs(b.net) - Math.abs(a.net) || a.name.localeCompare(b.name));
 }
 
@@ -774,7 +790,7 @@ function Opponent({ state, dispatch, user, go, id }) {
       <div class="section-head"><h2>History</h2></div>
       <div class="card rows">${opp.history.map((h) => h.kind === 'round'
         ? html`<button type="button" class="row" onClick=${() => go({ view: 'round', id: h.round.id })}>
-            <div class="grow"><div class="name">${h.round.course.name}</div><div class="meta">${dateLabel(h.at)}${h.live ? ' · in play' : ''}</div></div>
+            <div class="grow"><div class="name">${h.round.course.name}</div><div class="meta">${dateLabel(h.at)}${h.live ? ' · in play' : ''}${!h.live && Math.round((h.due - h.amount) * 100) !== 0 ? ` · settled as ${h.due ? money(h.due) : 'square'} with the group` : ''}</div></div>
             <b class=${`amt ${h.amount > 0 ? 'c-win' : h.amount < 0 ? 'c-loss' : 'c-n'}`}>${h.amount ? money(h.amount) : 'Square'}</b>
           </button>`
         : html`<div class="row">
@@ -999,14 +1015,16 @@ function CourseForm({ initial, onSave, onCancel }) {
   const setHole = (key, h, v) => { const arr = [...c[key]]; arr[h] = parseInt(v, 10) || 0; set({ [key]: arr }); };
   const siOk = [...c.si].sort((a, b) => a - b).every((v, i) => v === i + 1);
   const setTee = (id, patch) => set({ teeSets: c.teeSets.map((t) => (t.id === id ? { ...t, ...patch } : t)) });
-  const teesOk = c.teeSets.length > 0 && c.teeSets.every((t) => t.name.trim() && t.slope >= 55 && t.slope <= 155 && t.rating > 50 && t.rating < 85);
+  // Rating and slope stay as typed while editing ("72." mid-entry) and become numbers on save.
+  const teeNums = (t) => ({ ...t, rating: parseFloat(t.rating), slope: parseInt(t.slope, 10) });
+  const teesOk = c.teeSets.length > 0 && c.teeSets.map(teeNums).every((t) => t.name.trim() && t.slope >= 55 && t.slope <= 155 && t.rating > 50 && t.rating < 85);
   const valid = c.name.trim() && teesOk && siOk && c.par.every((p) => p >= 3 && p <= 6);
   const nine = (start) => html`<div class="grid-holes">
     <span class="h"></span>${Array.from({ length: 9 }, (_, i) => html`<span class="h">${start + i + 1}</span>`)}
     <span class="h">Par</span>${Array.from({ length: 9 }, (_, i) => html`<input aria-label=${`Par hole ${start + i + 1}`} inputmode="numeric" value=${c.par[start + i]} onInput=${(e) => setHole('par', start + i, e.target.value)} />`)}
     <span class="h">SI</span>${Array.from({ length: 9 }, (_, i) => html`<input aria-label=${`Stroke index hole ${start + i + 1}`} inputmode="numeric" value=${c.si[start + i]} onInput=${(e) => setHole('si', start + i, e.target.value)} />`)}
   </div>`;
-  return html`<form class="card pad" style="display:flex;flex-direction:column;gap:14px" onSubmit=${(e) => { e.preventDefault(); if (valid) onSave({ ...c, name: c.name.trim(), sample: false }); }}>
+  return html`<form class="card pad" style="display:flex;flex-direction:column;gap:14px" onSubmit=${(e) => { e.preventDefault(); if (valid) onSave({ ...c, name: c.name.trim(), teeSets: c.teeSets.map(teeNums), sample: false }); }}>
     <${ScanButton} kind="course" label="Fill from a scorecard photo" onResult=${fromScan} />
     ${scanNotes != null && html`<${ScanNotes} notes=${scanNotes} />`}
     <div class="form-grid">
@@ -1018,8 +1036,8 @@ function CourseForm({ initial, onSave, onCancel }) {
         <span class="h">Name</span><span class="h">Rating</span><span class="h">Slope</span><span></span>
         ${c.teeSets.map((t) => html`
           <input class="input" aria-label="Tee name" value=${t.name} onInput=${(e) => setTee(t.id, { name: e.target.value })} />
-          <input class="input" aria-label=${`${t.name} rating`} inputmode="decimal" value=${t.rating} onInput=${(e) => setTee(t.id, { rating: parseFloat(e.target.value) || 0 })} />
-          <input class="input" aria-label=${`${t.name} slope`} inputmode="numeric" value=${t.slope} onInput=${(e) => setTee(t.id, { slope: parseInt(e.target.value, 10) || 0 })} />
+          <input class="input" aria-label=${`${t.name} rating`} inputmode="decimal" value=${t.rating} onInput=${(e) => setTee(t.id, { rating: e.target.value })} />
+          <input class="input" aria-label=${`${t.name} slope`} inputmode="numeric" value=${t.slope} onInput=${(e) => setTee(t.id, { slope: e.target.value })} />
           <button type="button" class="x-btn" aria-label=${`Remove ${t.name} tees`} disabled=${c.teeSets.length === 1} onClick=${() => set({ teeSets: c.teeSets.filter((x) => x.id !== t.id) })}>${I.x}</button>`)}
       </div>
       <button type="button" class="btn ghost sm" style="align-self:flex-start" onClick=${() => set({ teeSets: [...c.teeSets, { id: uid('t-'), name: '', rating: 70.0, slope: 120 }] })}>${I.plus} Add tees</button>
@@ -1807,7 +1825,7 @@ function displayStrokes(round) {
   return N.matchStrokes({ ...round, game: g }, { a: ids, b: [] });
 }
 
-function Round({ round, dispatch, go }) {
+function Round({ round, dispatch, go, payments, meId }) {
   const [tab, setTab] = useState('score');
   const [toast, showToast] = useToast();
   const data = useRoundData(round);
@@ -1822,7 +1840,7 @@ function Round({ round, dispatch, go }) {
     ${tab === 'score' && html`<${ScoreTab} round=${round} data=${data} dispatch=${dispatch} toast=${showToast} onSettle=${() => setTab('settle')} />`}
     ${tab === 'card' && html`<${CardTab} round=${round} data=${data} dispatch=${dispatch} />`}
     ${tab === 'bets' && html`<${BetsTab} round=${round} data=${data} dispatch=${dispatch} />`}
-    ${tab === 'settle' && html`<${SettleTab} round=${round} data=${data} dispatch=${dispatch} go=${go} toast=${showToast} />`}
+    ${tab === 'settle' && html`<${SettleTab} round=${round} data=${data} dispatch=${dispatch} go=${go} toast=${showToast} payments=${payments} meId=${meId} />`}
     ${toast}
     <nav class="tabbar" aria-label="Round"><div class="tabbar-inner">
       ${tabs.map(([k, l, ic]) => html`<button type="button" aria-current=${tab === k ? 'page' : null} onClick=${() => { setTab(k); window.scrollTo(0, 0); }}>${ic}${l}</button>`)}
@@ -2361,13 +2379,63 @@ function BetsTab({ round, data, dispatch }) {
   </main>`;
 }
 
-function SettleTab({ round, data, dispatch, go, toast }) {
+/**
+ * Paying what one player owes from a round, split however it really got paid: one winner
+ * the lot, or some to each. Starts from the suggested payments and keeps a running total
+ * against what they owe.
+ */
+function PaySplit({ round, payer, plan, bal, isMe, onSave, onCancel }) {
+  const owes = -plan.left[payer.id];
+  const winners = round.players.filter((p) => bal[p.id] > 0 || plan.left[p.id] > 0);
+  const [amts, setAmts] = useState(() => Object.fromEntries(winners.map((p) => {
+    const t = plan.transfers.find((x) => !x.paid && x.from === payer.id && x.to === p.id);
+    return [p.id, t ? String(t.amount) : ''];
+  })));
+  const [note, setNote] = useState('');
+  const val = (id) => Math.round((parseFloat(amts[id]) || 0) * 100) / 100;
+  const total = Math.round(sum(winners.map((p) => val(p.id))) * 100) / 100;
+  const diff = Math.round((owes - total) * 100) / 100;
+  const valid = total > 0 && diff >= 0;
+  return html`<form class="pay-split" onSubmit=${(e) => {
+    e.preventDefault();
+    if (valid) onSave(winners.filter((p) => val(p.id) > 0).map((p) => ({ to: p.id, amount: val(p.id) })), note.trim() || null);
+  }}>
+    <p class="note" style="margin:0">Put down what ${isMe ? 'you' : first(payer.name)} paid each player. Any split works, as long as it adds up.</p>
+    ${winners.map((p) => html`<div class="pay-to">
+      <${Avatar} p=${p} size="sm" />
+      <div class="grow"><div class="name">${first(p.name)}</div>
+        <div class="meta">${plan.left[p.id] > 0 ? `${money(plan.left[p.id], { sign: false })} left to collect` : 'collected'}</div></div>
+      ${diff > 0 && html`<button type="button" class="link" onClick=${() => setAmts({ ...amts, [p.id]: String(Math.round((val(p.id) + diff) * 100) / 100) })}>+ rest</button>`}
+      <label class="money-input"><span>$</span><input inputmode="decimal" aria-label=${`Paid to ${p.name}`} value=${amts[p.id]} placeholder="0"
+        onInput=${(e) => setAmts({ ...amts, [p.id]: e.target.value.replace(/[^0-9.]/g, '') })} /></label>
+    </div>`)}
+    <div class=${`pay-tally ${diff < 0 ? 'over' : diff === 0 ? 'done' : ''}`}>
+      <span>Paying <b>${money(total, { sign: false })}</b> of ${money(owes, { sign: false })}</span>
+      <span>${diff === 0 ? html`${I.check} All covered` : diff > 0 ? `${money(diff, { sign: false })} still to pay` : `${money(-diff, { sign: false })} more than ${isMe ? 'you owe' : 'owed'}`}</span>
+    </div>
+    <input class="input" aria-label="Note" value=${note} onInput=${(e) => setNote(e.target.value)} placeholder="Note (Venmo, cash...)" maxlength="200" />
+    <div style="display:flex;gap:10px">
+      <button type="button" class="btn ghost" onClick=${onCancel}>Cancel</button>
+      <button class="btn primary" style="flex:1" disabled=${!valid}>Record ${valid ? money(total, { sign: false }) : 'payment'}</button>
+    </div>
+  </form>`;
+}
+
+function SettleTab({ round, data, dispatch, go, toast, payments, meId }) {
   const final = round.status === 'final';
   const allIn = round.players.every((p) => round.scores[p.id].every((v) => v != null));
   const bal = final ? data.settled : data.projected;
   const ranked = [...round.players].sort((a, b) => bal[b.id] - bal[a.id]);
-  const pays = N.settleUp(bal);
+  // A finished round's payments count against it; whatever's left gets the fewest payments.
+  const roundPays = final ? (payments || []).filter((p) => p.roundId === round.id) : [];
+  const plan = G.settlePlan(bal, roundPays);
+  const pays = plan.transfers;
+  const payers = round.players.filter((p) => bal[p.id] < 0 || roundPays.some((x) => x.from === p.id))
+    .sort((a, b) => (b.id === meId) - (a.id === meId) || bal[a.id] - bal[b.id]);
+  const [paying, setPaying] = useState(null);
+  const [confirmPay, setConfirmPay] = useState(null);
   const name = (id) => round.players.find((p) => p.id === id).name;
+  const player = (id) => round.players.find((p) => p.id === id);
   const [confirmDel, setConfirmDel] = useState(false);
   const text = () => [
     `${round.course.name} · ${dateLabel(round.createdAt)}`,
@@ -2384,7 +2452,47 @@ function SettleTab({ round, data, dispatch, go, toast }) {
       </div>`)}</div>
     </div>
 
-    <div class="section">
+    ${final && payers.length > 0 && html`<div class="section">
+      <div class="section-head"><h2>Pay up</h2><span class="meta">pay whoever you like</span></div>
+      <div class="card rows">${payers.map((p) => {
+        const owes = -bal[p.id];
+        const left = -plan.left[p.id];
+        const isMe = p.id === meId;
+        const mine = roundPays.filter((x) => x.from === p.id);
+        const todo = pays.filter((t) => !t.paid && t.from === p.id);
+        return html`<div class="payer">
+          <div class="payer-head">
+            <${Avatar} p=${p} />
+            <div class="grow"><div class="name">${isMe ? 'You owe' : `${first(p.name)} owes`} ${money(Math.max(owes, 0), { sign: false })}</div>
+              <div class="meta">${left <= 0 ? 'Paid up' : mine.length ? `${money(left, { sign: false })} left to pay` : 'Nothing paid yet'}</div></div>
+            ${left > 0 && paying !== p.id && html`<button type="button" class="btn soft sm" onClick=${() => setPaying(p.id)}>${I.cash} Pay</button>`}
+            ${left <= 0 && html`<span class="paid-tag">${I.check} Paid</span>`}
+          </div>
+          ${paying === p.id
+            ? html`<${PaySplit} round=${round} payer=${p} plan=${plan} bal=${bal} isMe=${isMe} onCancel=${() => setPaying(null)}
+                onSave=${(lines, note) => {
+                  for (const l of lines) dispatch({ type: 'addPayment', payment: { id: uid('pay-'), from: p.id, to: l.to, amount: l.amount, note, roundId: round.id, paidAt: Date.now() } });
+                  setPaying(null);
+                  toast(`Recorded ${money(sum(lines.map((l) => l.amount)), { sign: false })}`);
+                }} />`
+            : html`${mine.map((x) => html`<div class="pay-line">
+                <span class="arrow">${I.arrow}</span><${Avatar} p=${player(x.to)} size="sm" /><span>${first(name(x.to))}</span>
+                <span class="paid-tag">${I.check} Paid${x.note ? ` · ${x.note}` : ''}</span>
+                ${confirmPay === x.id
+                  ? html`<button type="button" class="btn danger sm" onClick=${() => { dispatch({ type: 'removePayment', id: x.id }); setConfirmPay(null); }}>Remove</button>
+                         <button type="button" class="btn ghost sm" onClick=${() => setConfirmPay(null)}>Keep</button>`
+                  : html`<b class="amt">${money(x.amount, { sign: false })}</b>
+                         <button type="button" class="x-btn" aria-label="Remove payment" onClick=${() => setConfirmPay(x.id)}>${I.x}</button>`}
+              </div>`)}
+              ${todo.map((t) => html`<div class="pay-line todo">
+                <span class="arrow">${I.arrow}</span><${Avatar} p=${player(t.to)} size="sm" /><span>${first(name(t.to))}</span>
+                <span class="note">suggested</span><b class="amt">${money(t.amount, { sign: false })}</b>
+              </div>`)}`}
+        </div>`;
+      })}</div>
+    </div>`}
+
+    ${!final && html`<div class="section">
       <div class="section-head"><h2>Who pays whom</h2><span class="meta">fewest payments</span></div>
       <div class="card rows">
         ${pays.length ? pays.map((t) => html`<div class="pay">
@@ -2394,7 +2502,7 @@ function SettleTab({ round, data, dispatch, go, toast }) {
           <span class="amt">${money(t.amount, { sign: false })}</span>
         </div>`) : html`<div class="empty-state">All square. Nobody owes anything.</div>`}
       </div>
-    </div>
+    </div>`}
 
     ${data.matches.length > 0 && html`<div class="section">
       <div class="section-head"><h2>Nassau by match</h2></div>

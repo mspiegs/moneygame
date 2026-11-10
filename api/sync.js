@@ -282,9 +282,15 @@ const handlers = {
     const amount = Number.isFinite(p.amount) && p.amount > 0 && p.amount <= 100000 ? Math.round(p.amount * 100) / 100 : bad('amount must be between 0 and 100,000');
     const players = await sql`select id from players where group_id = ${g} and id in (${from}, ${to})`;
     if (players.length !== 2) throw new HttpError(403, 'Both players must be in this group');
+    const roundId = p.roundId == null ? null : str(p.roundId, 'payment.roundId');
+    if (roundId) {
+      const inRound = await sql`select count(*)::int as n from round_players rp join rounds r on r.id = rp.round_id
+        where r.id = ${roundId} and r.group_id = ${g} and rp.player_id in (${from}, ${to})`;
+      if (inRound[0].n !== 2 || !(await canSeeRound(sql, roundId, user.id))) throw new HttpError(403, 'Both players must be in that round');
+    }
     const paidAt = new Date(Number.isFinite(p.paidAt) ? p.paidAt : Date.now()).toISOString();
     await sql`insert into payments (id, group_id, from_id, to_id, amount, round_id, note, paid_at, recorded_by)
-      values (${id}, ${g}, ${from}, ${to}, ${amount}, ${p.roundId ?? null}, ${typeof p.note === 'string' ? p.note.slice(0, 200) : null}, ${paidAt}, ${user.id})
+      values (${id}, ${g}, ${from}, ${to}, ${amount}, ${roundId}, ${typeof p.note === 'string' ? p.note.slice(0, 200) : null}, ${paidAt}, ${user.id})
       on conflict (id) do nothing`;
   },
 
