@@ -2,7 +2,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import { authed } from './_lib/auth.js';
 import { handle, HttpError, json } from './_lib/db.js';
 
-// POST /api/scan { kind: 'course' | 'round', image: { media_type, data }, context? }
+// POST /api/scan { kind: 'course' | 'round', image: { media_type, data } | images: [...], context? }
+// `images` (up to 4) are photos of the same card: front and back, or one shot in pieces.
 //
 // Reads a photo of a golf scorecard with Claude and returns structured data:
 //   course: { courseName, par[18], si[18], tees: [{ name, rating, slope, yardages[18] }] }
@@ -12,6 +13,7 @@ import { handle, HttpError, json } from './_lib/db.js';
 
 const MODEL = 'claude-opus-5-5';
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // the API's per-image limit (base64)
+const MAX_IMAGES = 4;
 const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 
 let client; // created on first use, so a missing key fails one request instead of the whole module
@@ -94,13 +96,17 @@ and treat women's/ladies' tees as their own tee entries named with "(W)", e.g. "
 - Handwritten scores: read the gross number of strokes. Circles, squares, dots, slashes and similar marks \
 are decorations, not digits. A score of 10 or more is two digits in one box.`;
 
-function promptFor(kind, context) {
+function promptFor(kind, context, count = 1) {
+  const several = count > 1
+    ? `These ${count} photos are all of the same scorecard (front and back, or parts of it). Combine them into one answer. \
+If two photos show the same value differently, use the clearer one and say so in notes.\n\n`
+    : '';
   if (kind === 'course') {
-    return 'Transcribe this scorecard\'s course details: course name, par and handicap for each hole, and every set of tees with its rating, slope and yardages.';
+    return `${several}Transcribe this scorecard's course details: course name, par and handicap for each hole, and every set of tees with its rating, slope and yardages.`;
   }
   const players = (context?.players || []).map((p) => `- id "${p.id}": ${p.name}`).join('\n') || '(none)';
   const course = context?.course ? `\nThe round is at ${context.course.name}. Use the card only for the scores; don't read par as a score.` : '';
-  return `Transcribe the handwritten scores on this scorecard, one entry per golfer.
+  return `${several}Transcribe the handwritten scores on this scorecard, one entry per golfer.
 
 Players in this golf group (match each row's name or initials to one of these when it clearly fits; otherwise playerId null, and never use the same id twice):
 ${players}${course}`;
@@ -144,9 +150,13 @@ export const POST = authed(handle(async (request) => {
   const body = await request.json().catch(() => null);
   const kind = body?.kind;
   if (kind !== 'course' && kind !== 'round') throw new HttpError(400, 'kind must be course or round');
-  const { media_type: mediaType, data } = body.image || {};
-  if (!IMAGE_TYPES.includes(mediaType) || typeof data !== 'string' || !data) throw new HttpError(400, 'Send a JPEG, PNG, WebP or GIF image');
-  if (data.length > MAX_IMAGE_BYTES) throw new HttpError(413, 'That photo is too large. Try again with a smaller one.');
+  const images = Array.isArray(body.images) ? body.images : [body.image];
+  if (!images.length || images.length > MAX_IMAGES) throw new HttpError(400, `Send 1 to ${MAX_IMAGES} photos`);
+  for (const img of images) {
+    const { media_type: mediaType, data } = img || {};
+    if (!IMAGE_TYPES.includes(mediaType) || typeof data !== 'string' || !data) throw new HttpError(400, 'Send a JPEG, PNG, WebP or GIF image');
+    if (data.length > MAX_IMAGE_BYTES) throw new HttpError(413, 'That photo is too large. Try again with a smaller one.');
+  }
 
   if (!process.env.ANTHROPIC_API_KEY) throw new HttpError(503, 'Scorecard reading isn\u2019t set up on this server yet.');
   client ??= new Anthropic();
@@ -164,8 +174,8 @@ export const POST = authed(handle(async (request) => {
       messages: [{
         role: 'user',
         content: [
-          { type: 'image', source: { type: 'base64', media_type: mediaType, data } },
-          { type: 'text', text: promptFor(kind, body.context) },
+          ...images.map((img) => ({ type: 'image', source: { type: 'base64', media_type: img.media_type, data: img.data } })),
+          { type: 'text', text: promptFor(kind, body.context, images.length) },
         ],
       }],
     });

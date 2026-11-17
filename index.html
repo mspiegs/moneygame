@@ -111,6 +111,14 @@ body::before { content: ''; position: fixed; top: 0; left: 0; right: 0; height: 
 .card.rows > .invite-panel:last-child { border-radius: 0 0 var(--r) var(--r); }
 .invite-panel .input { background: var(--surface); font-size: 14px; }
 .scan-match { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1.4fr); align-items: center; gap: 10px; }
+.photo-tray { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.photo-thumb { position: relative; aspect-ratio: 3 / 4; border-radius: 10px; overflow: hidden; background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--line); }
+.photo-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.photo-x { position: absolute; top: 4px; right: 4px; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: rgba(0, 0, 0, .6); color: #fff; }
+.photo-x svg { width: 14px; height: 14px; }
+.photo-add { aspect-ratio: 3 / 4; border-radius: 10px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  color: var(--accent); background: var(--accent-soft); font-size: 12px; font-weight: 750; }
+.photo-add svg { width: 20px; height: 20px; }
 .scan-row { display: flex; flex-direction: column; gap: 10px; }
 .scan-row + .scan-row { padding-top: 10px; border-top: 1px solid var(--line); }
 .scan-new { padding-left: 4px; }

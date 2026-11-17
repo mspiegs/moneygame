@@ -8,7 +8,7 @@ import * as VG from './vegas.js';
 import * as SN from './snake.js';
 import * as A from './auth.js';
 import { API_BASE } from './config.js';
-import { scanScorecard } from './camera.js';
+import { scanScorecard, pickPhotos, readPhotos, MAX_PHOTOS } from './camera.js';
 import { applyTheme, getTheme, setTheme } from './theme.js';
 import { Sync, opsFor } from './store.js';
 
@@ -919,9 +919,64 @@ function ScanButton({ kind, context, label, onResult, block = true }) {
   </div>`;
 }
 
+/**
+ * Fill a course from one or more photos of its scorecard. Cards often split things up (holes
+ * on the front, ratings and slopes on the back), so photos collect in a tray and get read together.
+ */
+function CoursePhotos({ onResult }) {
+  const [files, setFiles] = useState([]);
+  const [reading, setReading] = useState(false);
+  const [error, setError] = useState(null);
+  const urls = useMemo(() => files.map((f) => URL.createObjectURL(f)), [files]);
+  useEffect(() => () => urls.forEach((u) => URL.revokeObjectURL(u)), [urls]);
+  const add = async () => {
+    setError(null);
+    const picked = await pickPhotos({ multiple: true });
+    if (!picked.length) return;
+    const next = [...files, ...picked];
+    if (next.length > MAX_PHOTOS) setError(`Up to ${MAX_PHOTOS} photos. Kept the first ${MAX_PHOTOS}.`);
+    setFiles(next.slice(0, MAX_PHOTOS));
+  };
+  const read = async () => {
+    setError(null);
+    setReading(true);
+    try {
+      const res = await readPhotos('course', files);
+      if (!res.readable) { setError(res.notes || 'That doesn\u2019t look like a readable scorecard. Try straighter, closer photos.'); return; }
+      setFiles([]);
+      onResult(res);
+    } catch (e) {
+      setError(e instanceof TypeError ? 'You need signal to read a scorecard.' : e.message);
+    } finally {
+      setReading(false);
+    }
+  };
+  const n = files.length;
+  return html`<div style="display:flex;flex-direction:column;gap:8px">
+    ${!n ? html`
+      <button type="button" class="btn soft block" onClick=${add}>${I.camera} Fill from scorecard photos</button>
+      <p class="note" style="margin:0;text-align:center">Info split across the card? Add a photo of each side.</p>`
+    : html`
+      <div class="photo-tray">
+        ${urls.map((u, i) => html`<div class="photo-thumb">
+          <img src=${u} alt=${`Scorecard photo ${i + 1}`} />
+          ${!reading && html`<button type="button" class="photo-x" aria-label=${`Remove photo ${i + 1}`} onClick=${() => setFiles(files.filter((_, j) => j !== i))}>${I.x}</button>`}
+        </div>`)}
+        ${n < MAX_PHOTOS && !reading && html`<button type="button" class="photo-add" onClick=${add}>${I.plus}<span>Add photo</span></button>`}
+      </div>
+      <div style="display:flex;gap:10px">
+        <button type="button" class="btn ghost" disabled=${reading} onClick=${() => { setFiles([]); setError(null); }}>Cancel</button>
+        <button type="button" class="btn primary" style="flex:1" disabled=${reading} onClick=${read}>
+          ${reading ? html`<span class="spinner" aria-hidden="true"></span> Reading\u2026 (about 30 seconds)` : `Read ${n === 1 ? 'this photo' : `these ${n} photos`}`}
+        </button>
+      </div>`}
+    ${error && html`<div class="form-error" role="alert">${error}</div>`}
+  </div>`;
+}
+
 /** What Claude flagged while reading the card, plus the standing reminder to check it. */
 function ScanNotes({ notes }) {
-  return html`<div class="banner">${I.info}<span style="flex:1">Filled in from your photo. Check every number against the card before saving.${notes ? html`<br /><span class="note">${notes}</span>` : ''}</span></div>`;
+  return html`<div class="banner">${I.info}<span style="flex:1">Filled in from your photos. Check every number against the card before saving.${notes ? html`<br /><span class="note">${notes}</span>` : ''}</span></div>`;
 }
 
 /** A handicap index as typed ("12.4", "+1.2"), or null if it isn't one. */
@@ -1025,7 +1080,7 @@ function CourseForm({ initial, onSave, onCancel }) {
     <span class="h">SI</span>${Array.from({ length: 9 }, (_, i) => html`<input aria-label=${`Stroke index hole ${start + i + 1}`} inputmode="numeric" value=${c.si[start + i]} onInput=${(e) => setHole('si', start + i, e.target.value)} />`)}
   </div>`;
   return html`<form class="card pad" style="display:flex;flex-direction:column;gap:14px" onSubmit=${(e) => { e.preventDefault(); if (valid) onSave({ ...c, name: c.name.trim(), teeSets: c.teeSets.map(teeNums), sample: false }); }}>
-    <${ScanButton} kind="course" label="Fill from a scorecard photo" onResult=${fromScan} />
+    <${CoursePhotos} onResult=${fromScan} />
     ${scanNotes != null && html`<${ScanNotes} notes=${scanNotes} />`}
     <div class="form-grid">
       <div class="field span"><label for="cf-name">Course</label><input id="cf-name" class="input" value=${c.name} onInput=${(e) => set({ name: e.target.value })} placeholder="e.g. Ridgewood CC" /></div>
