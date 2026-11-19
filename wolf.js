@@ -4,9 +4,15 @@
 // vs the rest), or goes it alone after seeing them all (lone wolf), or calls it
 // before anyone hits (blind wolf). Low net ball on each side wins the hole.
 //
-// Money is pair by pair: every player on the winning side wins the hole's value
-// from every player on the losing side. A partner hole is worth 1 point, a lone
-// wolf `lone` points and a blind wolf `blind` points.
+// Two ways to score (`scoring`):
+//   'plusminus'  Each player on the winning side is up the hole's value and each on the losing
+//                side down it: a partner hole is 1 point, a lone wolf `lone`, a blind wolf
+//                `blind`. When the sides are uneven the smaller side covers the bigger one, so
+//                every hole adds up to zero (a lone wolf wins or loses the value from each of the
+//                others). Money is points x stake.
+//   'points'     Each player on the winning side gets the hole's points (1, `lone` or `blind`)
+//                and nobody goes negative. Everyone settles with everyone on the difference in
+//                points x stake.
 // Options (per game):
 //   ties        'push': a tied hole is worth nothing. 'carry': its value rides on the next hole.
 //   lastHoles   Holes left after the full rotations (17-18 with 4 players, 16-18 with 5):
@@ -18,6 +24,8 @@
 
 import { matchStrokes, netScore } from './nassau.js';
 
+export const scoringOf = (game) => game.scoring ?? 'plusminus';
+
 export function defaultWolf(players = []) {
   return {
     id: `wf-${Math.random().toString(36).slice(2, 8)}`,
@@ -25,6 +33,7 @@ export function defaultWolf(players = []) {
     players: players.slice(0, 5), // rotation order: players[0] is the wolf on hole 1
     stake: 1, // $ per point
     handicap: { mode: 'net', allowance: 100, strokesOff: 'match' }, // 'match' = off the low man, or 'full'
+    scoring: 'plusminus',
     lone: 2,
     blind: 3, // 0 = no blind wolf
     ties: 'push',
@@ -80,6 +89,7 @@ export function sides(game, wolf, pick) {
  */
 export function computeWolf(round, game) {
   const ids = game.players;
+  const pointsOnly = scoringOf(game) === 'points';
   const strokes = wolfStrokes(round, game);
   const { par, si } = round.course;
   const totals = Object.fromEntries(ids.map((id) => [id, 0]));
@@ -112,22 +122,39 @@ export function computeWolf(round, game) {
     hole.birdie = !!game.birdies && win.some((id) => round.scores[id][h] < par[h]);
     hole.value = (s.mult + carry) * (hole.birdie ? 2 : 1);
     carry = 0;
+    if (pointsOnly) {
+      for (const w of win) { totals[w] += hole.value; hole.points[w] = hole.value; }
+      continue;
+    }
+    // The smaller side covers the bigger one: each pair of opponents swaps value / (smaller side's size).
+    const per = hole.value / Math.min(win.length, lose.length);
     for (const w of win)
       for (const l of lose) {
-        totals[w] += hole.value;
-        totals[l] -= hole.value;
-        hole.points[w] = (hole.points[w] || 0) + hole.value;
-        hole.points[l] = (hole.points[l] || 0) - hole.value;
+        totals[w] += per;
+        totals[l] -= per;
+        hole.points[w] = (hole.points[w] || 0) + per;
+        hole.points[l] = (hole.points[l] || 0) - per;
         const key = w < l ? `${w}|${l}` : `${l}|${w}`;
-        pairs.set(key, (pairs.get(key) || 0) + (w < l ? hole.value : -hole.value));
+        pairs.set(key, (pairs.get(key) || 0) + (w < l ? per : -per));
       }
   }
-  const money = Object.fromEntries(ids.map((id) => [id, round2(totals[id] * game.stake)]));
+  for (const id of ids) totals[id] = round2(totals[id]);
+  for (const x of holes) for (const id in x.points) x.points[id] = round2(x.points[id]);
+  if (pointsOnly) {
+    // Everyone settles with everyone on the difference in points.
+    for (let i = 0; i < ids.length; i++)
+      for (let j = i + 1; j < ids.length; j++) pairs.set(`${ids[i]}|${ids[j]}`, totals[ids[i]] - totals[ids[j]]);
+  }
+  const money = Object.fromEntries(ids.map((id) => [id, 0]));
   const pairwise = [];
   for (const [key, v] of pairs) {
     const [x, y] = key.split('|');
     const amount = round2(Math.abs(v) * game.stake);
-    if (amount) pairwise.push(v > 0 ? { winner: x, loser: y, amount } : { winner: y, loser: x, amount });
+    if (!amount) continue;
+    const [w, l] = v > 0 ? [x, y] : [y, x];
+    pairwise.push({ winner: w, loser: l, amount });
+    money[w] = round2(money[w] + amount);
+    money[l] = round2(money[l] - amount);
   }
   return { game, holes, totals, thru, pendingCarry: carry, strokes, money, pairwise };
 }
@@ -136,6 +163,7 @@ export function computeWolf(round, game) {
 export function wolfSummary(game) {
   return [
     `$${game.stake}/pt`,
+    scoringOf(game) === 'points' && 'points only',
     `lone ×${game.lone}`,
     game.blind > 0 && `blind ×${game.blind}`,
     game.ties === 'carry' && 'carryovers',

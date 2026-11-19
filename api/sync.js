@@ -125,7 +125,7 @@ const handlers = {
         if (!Array.isArray(g.players) || g.players.length < 3 || g.players.length > 5 || g.players.some((p) => !ids.includes(p))) bad('Wolf needs 3 to 5 of the round\u2019s players');
         if (!(Number.isFinite(g.stake) && g.stake >= 0 && g.stake <= 10000)) bad('Wolf stake must be 0-10,000');
         if (![g.lone, g.blind].every((m) => Number.isInteger(m) && m >= 0 && m <= 10)) bad('Wolf multipliers must be 0-10');
-      } else if (g?.type === 'hammer') {
+        if (g.scoring != null && !['plusminus', 'points'].includes(g.scoring)) bad('Wolf scoring must be plusminus or points');      } else if (g?.type === 'hammer') {
         if (typeof g.id !== 'string' || !g.id) bad('Hammer needs an id');
         const sides = [g.a, g.b];
         if (!sides.every((s) => Array.isArray(s) && s.length >= 1 && s.length <= 2 && s.every((p) => ids.includes(p))) || g.a.length !== g.b.length

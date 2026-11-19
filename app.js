@@ -1667,6 +1667,7 @@ function WolfSetup({ round, g, players, onChange }) {
   const name = (id) => first(players.find((p) => p.id === id)?.name ?? '?');
   const rot = ready ? W.rotationHoles(g) : 18;
   const leftover = rot < 18 ? (rot === 17 ? 'Hole 18' : `Holes ${rot + 1}\u2013${18}`) : null;
+  const pointsOnly = W.scoringOf(g) === 'points';
   return html`<div class="card np-setup">
     <div class="opt-sub" style="padding-top:14px">
       <div class="eyebrow" style="margin-bottom:8px">Players, in wolf order ${ready ? '' : html`<span class="neg">· pick 3 to 5</span>`}</div>
@@ -1677,7 +1678,14 @@ function WolfSetup({ round, g, players, onChange }) {
       })}</div>
       ${ready && html`<p class="note" style="margin:8px 0 0">Wolf on hole 1 is ${name(g.players[0])}, then ${g.players.slice(1).map(name).join(', ')}, and around again.${leftover ? ` ${leftover}: ${g.lastHoles === 'trailing' ? 'whoever is furthest behind' : 'keeps rotating'}.` : ''} Tap to change the order.</p>`}
     </div>
-    <${Opt} title="Per point" desc=${`Each winner collects this from each loser: a partner hole is 1 point, a lone wolf ${g.lone}${g.blind ? `, a blind wolf ${g.blind}` : ''}`}>
+    <div class="opt-sub">
+      <div class="eyebrow" style="margin-bottom:8px">Scoring</div>
+      <${Seg} tall value=${pointsOnly ? 'points' : 'plusminus'} onChange=${(v) => upd({ scoring: v })} options=${[
+        { value: 'plusminus', label: 'Plus / minus', sub: 'winners up, losers down' },
+        { value: 'points', label: 'Points only', sub: 'nobody goes negative' },
+      ]} />
+    </div>
+    <${Opt} title="Per point" desc=${`Each winner gets the hole's points${pointsOnly ? '' : ' and each loser loses them'}: a normal hole is 1, a lone wolf ${g.lone}${g.blind ? `, a blind wolf ${g.blind}` : ''}${pointsOnly ? '. Everyone settles on the difference in points' : ''}`}>
       <${Stepper} label="Dollars per point" value=${g.stake} min=${1} max=${100} step=${1} format=${(v) => `$${v}`} onChange=${(v) => upd({ stake: v })} />
     </${Opt}>
     <div class="opt-sub">
@@ -2260,6 +2268,7 @@ function wolfCall(round, x) {
  */
 function WolfCard({ round, r, hole, detail, dispatch }) {
   const g = r.game;
+  const pointsOnly = W.scoringOf(g) === 'points';
   const n = (id) => first(round.players.find((p) => p.id === id)?.name ?? '?');
   const pl = g.players.map((id) => round.players.find((p) => p.id === id)).filter(Boolean);
   const ranked = [...pl].sort((a, b) => r.totals[b.id] - r.totals[a.id]);
@@ -2310,7 +2319,9 @@ function WolfCard({ round, r, hole, detail, dispatch }) {
         </tr>`)}
       </tbody>
     </table></div>
-    <p class="note" style="margin:0">Call: first letter of the partner, L = lone wolf, B = blind wolf. Each winner collects the hole\u2019s points from each loser; money is points \u00d7 $${g.stake}.</p>`}
+    <p class="note" style="margin:0">Call: first letter of the partner, L = lone wolf, B = blind wolf. ${pointsOnly
+      ? `Winners earn points; everyone settles with everyone on the difference \u00d7 $${g.stake}.`
+      : `Winners are up the hole\u2019s points and losers down them; money is points \u00d7 $${g.stake}.`}</p>`}
   </div>`;
 }
 
